@@ -54,14 +54,14 @@ async def display(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def add_torrent(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    url = context.args
+    url = " ".join(context.args).strip()
     if not url:
         await context.bot.send_message(chat_id=update.effective_chat.id, text="Please provide a url")
         return
-    text = ''
-    torrent = qbt_client.torrents_add(urls=url)
-    if torrent:
-        qbt_client.torrents_reannounce(hashes=torrent)
+    text = ""
+    torrent_hash = qbt_client.torrents_add(urls=url)
+    if torrent_hash:
+        qbt_client.torrents_reannounce(hashes=torrent_hash)
         newest_torrent = None
         for torrent in qbt_client.torrents_info():
             if newest_torrent is None or torrent.added_on > newest_torrent.added_on:
@@ -76,8 +76,8 @@ async def add_torrent(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def delete_torrent(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # filter the hash
-    hash = context.args
-    if not hash:
+    torrent_hash = context.args[0] if context.args else None
+    if not torrent_hash:
         # get all the torrents and display them
         text = "<b>Current Torrents:</b>\n\n"
         for torrent in sorted(qbt_client.torrents_info(), key=lambda x: x.name):
@@ -87,16 +87,16 @@ async def delete_torrent(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # check the torrent exists
     found = False
     for torrent in qbt_client.torrents_info():
-        if torrent.hash == hash:
+        if torrent.hash == torrent_hash:
             found = True
             break
     if found:
-        qbt_client.torrents_delete(torrent_hashes=hash, delete_files=True)
+        qbt_client.torrents_delete(torrent_hashes=torrent_hash, delete_files=True)
         await context.bot.send_message(chat_id=update.effective_chat.id, text="torrent deleted")
         return
     # check if the torrent is deleted
     for torrent in qbt_client.torrents_info():
-        if torrent.hash == hash:
+        if torrent.hash == torrent_hash:
             await context.bot.send_message(chat_id=update.effective_chat.id, text="Failed to delete torrent")
             return
     if not found:
@@ -112,10 +112,11 @@ if __name__ == '__main__':
     application = ApplicationBuilder().token(get_token()).build()
     # load the json file
     try:
-        conn_info = json.load(open('qbit.json'))
+        with open('qbit.json') as f:
+            conn_info = json.load(f)
     except FileNotFoundError:
-        context.bot.send_message(
-            chat_id=update.effective_chat.id, text="Please provide a qbit.json file")
+        print("Please provide a qbit.json file")
+        raise SystemExit(1)
 
     qbt_client = qbittorrentapi.Client(**conn_info)
     try:
