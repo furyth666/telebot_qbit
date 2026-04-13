@@ -10,7 +10,6 @@ import httpx
 class TorrentSummary:
     name: str
     hash: str
-    category: str
     state: str
     progress: float
     dlspeed: int
@@ -27,16 +26,6 @@ class TorrentFile:
     name: str
     size: int
     priority: int
-
-
-@dataclass
-class TorrentProperties:
-    save_path: str
-    total_uploaded: int
-    share_ratio: float
-    creation_date: int
-    completion_date: int
-    total_size: int
 
 
 class QbitClient:
@@ -97,7 +86,6 @@ class QbitClient:
             TorrentSummary(
                 name=item["name"],
                 hash=item["hash"],
-                category=item.get("category", ""),
                 state=item["state"],
                 progress=float(item.get("progress", 0)),
                 dlspeed=int(item.get("dlspeed", 0)),
@@ -116,22 +104,6 @@ class QbitClient:
             if item.hash == torrent_hash:
                 return item
         return None
-
-    async def get_torrent_properties(self, torrent_hash: str) -> TorrentProperties:
-        response = await self._request(
-            "GET",
-            "/api/v2/torrents/properties",
-            params={"hash": torrent_hash},
-        )
-        item = response.json()
-        return TorrentProperties(
-            save_path=item.get("save_path", ""),
-            total_uploaded=int(item.get("total_uploaded", 0)),
-            share_ratio=float(item.get("share_ratio", 0)),
-            creation_date=int(item.get("creation_date", 0)),
-            completion_date=int(item.get("completion_date", 0)),
-            total_size=int(item.get("total_size", 0)),
-        )
 
     async def pause_torrent(self, torrent_hash: str) -> None:
         await self._request(
