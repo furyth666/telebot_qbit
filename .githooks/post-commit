@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+if [[ "${QBIT_POST_COMMIT_RUNNING:-0}" == "1" ]]; then
+  exit 0
+fi
+
+branch="$(git symbolic-ref --quiet --short HEAD || true)"
+
+if [[ "$branch" != "main" ]]; then
+  exit 0
+fi
+
+export QBIT_POST_COMMIT_RUNNING=1
+
+git push --force-with-lease origin "$branch"
+
+if [[ -x "scripts/sync_unraid.sh" ]]; then
+  scripts/sync_unraid.sh
+fi
