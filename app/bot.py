@@ -556,6 +556,15 @@ async def text_link_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         if magnet_count == 1:
             notes.append("📤 该 magnet 任务上传限速已设为 30 KB/s")
         await message.reply_text("\n".join(notes), parse_mode=ParseMode.HTML)
+        for known_hashes in background_hash_sets:
+            context.application.create_task(
+                _background_finalize_torrent(
+                    context.application,
+                    qbit,
+                    known_hashes,
+                    chat.id,
+                )
+            )
         return
 
     extra_notes: list[str] = []
