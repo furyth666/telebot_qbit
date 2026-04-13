@@ -17,6 +17,7 @@ class TorrentSummary:
     eta: int
     size: int
     completion_on: int
+    added_on: int
 
 
 @dataclass
@@ -92,9 +93,17 @@ class QbitClient:
                 eta=int(item.get("eta", 0)),
                 size=int(item.get("size", 0)),
                 completion_on=int(item.get("completion_on", 0)),
+                added_on=int(item.get("added_on", 0)),
             )
             for item in items
         ]
+
+    async def get_torrent(self, torrent_hash: str) -> TorrentSummary | None:
+        torrents = await self.list_torrents(filter_name="all")
+        for item in torrents:
+            if item.hash == torrent_hash:
+                return item
+        return None
 
     async def pause_torrent(self, torrent_hash: str) -> None:
         await self._request(

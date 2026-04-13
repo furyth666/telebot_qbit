@@ -20,6 +20,11 @@ class Settings:
     qbit_username: str
     qbit_password: str
     bot_log_level: str = "INFO"
+    jav_category_name: str = "JAV"
+    jav_name_regex: str = r"[A-Za-z]{2,}-\d{2,}"
+    jav_large_file_threshold_gb: float = 1.0
+    magnet_upload_limit_kib: int = 30
+    state_file_path: str = "data/bot_state.json"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -32,4 +37,11 @@ class Settings:
             qbit_username=os.environ["QBIT_USERNAME"],
             qbit_password=os.environ["QBIT_PASSWORD"],
             bot_log_level=os.getenv("BOT_LOG_LEVEL", "INFO"),
+            jav_category_name=os.getenv("JAV_CATEGORY_NAME", "JAV"),
+            jav_name_regex=os.getenv("JAV_NAME_REGEX", r"[A-Za-z]{2,}-\d{2,}"),
+            jav_large_file_threshold_gb=float(
+                os.getenv("JAV_LARGE_FILE_THRESHOLD_GB", "1")
+            ),
+            magnet_upload_limit_kib=int(os.getenv("MAGNET_UPLOAD_LIMIT_KIB", "30")),
+            state_file_path=os.getenv("STATE_FILE_PATH", "data/bot_state.json"),
         )

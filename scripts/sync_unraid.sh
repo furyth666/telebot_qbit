@@ -28,9 +28,11 @@ RSYNC_RSH=(ssh -i "$UNRAID_SSH_KEY" -p "$UNRAID_PORT" -o StrictHostKeyChecking=n
 
 rsync -az --delete \
   --filter "protect .env" \
+  --filter "protect data/" \
   --exclude ".git/" \
   --exclude ".deploy/" \
   --exclude ".env" \
+  --exclude "data/" \
   --exclude "__pycache__/" \
   --exclude "*.pyc" \
   -e "${RSYNC_RSH[*]}" \

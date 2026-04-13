@@ -3,7 +3,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
+from dataclasses import dataclass
 from html import escape
+from urllib.parse import parse_qs, unquote, urlparse
 
 from telegram import BotCommand, Update
 from telegram.constants import ParseMode
@@ -16,7 +19,8 @@ from telegram.ext import (
 )
 
 from app.config import Settings
-from app.qbit_client import QbitClient, TorrentFile, TorrentSummary
+from app.qbit_client import QbitClient, TorrentSummary
+from app.state_store import BotState, StateStore
 
 
 _STATE_LABELS = {
@@ -68,10 +72,32 @@ _DIRECT_DOWNLOAD_HINTS = (
     "/download",
     "download.php",
 )
-_JAV_CATEGORY_NAME = "JAV"
-_JAV_NAME_PATTERN = re.compile(r"[A-Za-z]{2,}-\d{2,}")
-_LARGE_FILE_THRESHOLD_BYTES = 1024 * 1024 * 1024
-_MAGNET_UPLOAD_LIMIT_BYTES = 30 * 1024
+_CONTEXT_LOOKBACK_SECONDS = 10
+_CONTEXT_POLL_ATTEMPTS = 20
+_CONTEXT_POLL_INTERVAL_SECONDS = 1
+_FILES_POLL_ATTEMPTS = 10
+
+
+@dataclass(frozen=True)
+class AddContext:
+    known_hashes: set[str]
+    started_at: int
+    name_hint: str | None
+
+
+def _magnet_upload_limit_bytes(settings: Settings) -> int:
+    return settings.magnet_upload_limit_kib * 1024
+
+
+def _jav_large_file_threshold_bytes(settings: Settings) -> int:
+    return int(settings.jav_large_file_threshold_gb * 1024 * 1024 * 1024)
+
+
+def _fmt_large_file_threshold(settings: Settings) -> str:
+    value = settings.jav_large_file_threshold_gb
+    if float(value).is_integer():
+        return f"{int(value)} GB"
+    return f"{value:g} GB"
 
 
 def _fmt_bytes(value: int) -> str:
@@ -183,45 +209,109 @@ def _text_is_link_only(text: str, links: list[str]) -> bool:
     return not remainder
 
 
-def _is_jav_title(name: str) -> bool:
-    return bool(_JAV_NAME_PATTERN.search(name))
+def _extract_name_hint(url: str) -> str | None:
+    if url.lower().startswith("magnet:?"):
+        query = parse_qs(urlparse(url).query)
+        raw = query.get("dn", [])
+        if raw and raw[0]:
+            return unquote(raw[0])
+        return None
+
+    parsed = urlparse(url)
+    path = parsed.path.rsplit("/", 1)[-1]
+    if path:
+        return unquote(path)
+    return None
+
+
+def _normalize_name_for_match(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", value.lower())
+
+
+def _matches_add_context(item: TorrentSummary, context: AddContext) -> bool:
+    if item.hash in context.known_hashes:
+        return False
+    if item.added_on and item.added_on < context.started_at - _CONTEXT_LOOKBACK_SECONDS:
+        return False
+    if not context.name_hint:
+        return True
+
+    normalized_hint = _normalize_name_for_match(context.name_hint)
+    normalized_name = _normalize_name_for_match(item.name)
+    if not normalized_hint:
+        return True
+    return normalized_hint in normalized_name or normalized_name in normalized_hint
+
+
+def _is_jav_title(name: str, pattern: re.Pattern[str]) -> bool:
+    return bool(pattern.search(name))
+
+
+def _get_jav_pattern(application: Application) -> re.Pattern[str]:
+    return application.bot_data["jav_name_pattern"]
+
+
+def _get_state_store(application: Application) -> StateStore:
+    return application.bot_data["state_store"]
+
+
+def _get_state(application: Application) -> BotState:
+    return application.bot_data["bot_state"]
+
+
+def _persist_state(application: Application) -> None:
+    _get_state_store(application).save(_get_state(application))
 
 
 async def _apply_jav_category_to_new_torrents(
+    application: Application,
     qbit: QbitClient,
-    known_hashes: set[str],
+    context: AddContext,
 ) -> list[TorrentSummary]:
+    settings: Settings = application.bot_data["settings"]
+    pattern = _get_jav_pattern(application)
+    processed_hashes = _get_state(application).jav_processed_hashes
+
     try:
-        await qbit.create_category(_JAV_CATEGORY_NAME)
+        await qbit.create_category(settings.jav_category_name)
     except Exception:
         pass
     categorized: dict[str, TorrentSummary] = {}
 
-    for _ in range(10):
+    for _ in range(_CONTEXT_POLL_ATTEMPTS):
         torrents = await qbit.list_torrents(filter_name="all")
-        new_torrents = [item for item in torrents if item.hash not in known_hashes]
-        matched = [item for item in new_torrents if _is_jav_title(item.name)]
+        new_torrents = [
+            item
+            for item in torrents
+            if item.hash not in processed_hashes and _matches_add_context(item, context)
+        ]
+        matched = [item for item in new_torrents if _is_jav_title(item.name, pattern)]
         for item in matched:
             if item.hash in categorized:
                 continue
-            await qbit.set_category(item.hash, _JAV_CATEGORY_NAME)
+            await qbit.set_category(item.hash, settings.jav_category_name)
             categorized[item.hash] = item
         if categorized:
             return list(categorized.values())
-        await asyncio.sleep(1)
+        await asyncio.sleep(_CONTEXT_POLL_INTERVAL_SECONDS)
 
     return []
 
 
-async def _apply_jav_file_selection(qbit: QbitClient, torrent_hash: str) -> bool:
-    for _ in range(10):
+async def _apply_jav_file_selection(
+    application: Application,
+    qbit: QbitClient,
+    torrent_hash: str,
+) -> bool:
+    threshold = _jav_large_file_threshold_bytes(application.bot_data["settings"])
+    for _ in range(_FILES_POLL_ATTEMPTS):
         files = await qbit.get_torrent_files(torrent_hash)
         if not files:
             await asyncio.sleep(1)
             continue
 
-        large_files = [item for item in files if item.size > _LARGE_FILE_THRESHOLD_BYTES]
-        small_files = [item for item in files if item.size <= _LARGE_FILE_THRESHOLD_BYTES]
+        large_files = [item for item in files if item.size > threshold]
+        small_files = [item for item in files if item.size <= threshold]
         if not large_files or not small_files:
             return False
 
@@ -235,18 +325,19 @@ async def _apply_jav_file_selection(qbit: QbitClient, torrent_hash: str) -> bool
 async def _notify_completion_loop(application: Application) -> None:
     settings: Settings = application.bot_data["settings"]
     qbit: QbitClient = application.bot_data["qbit"]
-    notified_hashes: set[str] = application.bot_data["notified_completed_hashes"]
+    state = _get_state(application)
 
     while True:
         try:
             torrents = await qbit.list_torrents(filter_name="all")
             for item in torrents:
-                if item.hash in notified_hashes:
+                if item.hash in state.notified_completed_hashes:
                     continue
                 if item.progress < 1 and item.completion_on <= 0:
                     continue
 
-                notified_hashes.add(item.hash)
+                state.notified_completed_hashes.add(item.hash)
+                _persist_state(application)
                 text = (
                     "<b>✅ 种子下载完成</b>\n"
                     f"📦 <b>{escape(item.name)}</b>\n"
@@ -269,52 +360,85 @@ async def _notify_completion_loop(application: Application) -> None:
 async def _background_finalize_torrent(
     application: Application,
     qbit: QbitClient,
-    known_hashes: set[str],
+    context: AddContext,
     chat_id: int,
 ) -> None:
     try:
-        categorized = await _apply_jav_category_to_new_torrents(qbit, known_hashes)
+        settings: Settings = application.bot_data["settings"]
+        threshold_text = _fmt_large_file_threshold(settings)
+        categorized = await _apply_jav_category_to_new_torrents(application, qbit, context)
         if categorized:
+            state = _get_state(application)
             filtered_count = 0
             for item in categorized:
-                if await _apply_jav_file_selection(qbit, item.hash):
+                state.jav_processed_hashes.add(item.hash)
+                if await _apply_jav_file_selection(application, qbit, item.hash):
                     filtered_count += 1
+            _persist_state(application)
 
             if len(categorized) == 1:
                 notes = [
-                    "<b>🗂️ 已自动分类到 JAV</b>",
+                    f"<b>🗂️ 已自动分类到 {escape(settings.jav_category_name)}</b>",
                     "检测到新任务名称包含“多个字母-多个数字”的格式。",
                 ]
                 if filtered_count:
-                    notes.append("📁 已仅保留大于 1 GB 的文件下载，小文件已跳过。")
+                    notes.append(f"📁 已仅保留大于 {threshold_text} 的文件下载，小文件已跳过。")
             else:
                 notes = [
-                    f"<b>🗂️ 已自动分类 {len(categorized)} 个任务到 JAV</b>",
+                    f"<b>🗂️ 已自动分类 {len(categorized)} 个任务到 {escape(settings.jav_category_name)}</b>",
                     "检测到这些新任务名称包含“多个字母-多个数字”的格式。",
                 ]
                 if filtered_count:
                     notes.append(
-                        f"📁 其中 {filtered_count} 个任务已仅保留大于 1 GB 的文件下载，小文件已跳过。"
+                        f"📁 其中 {filtered_count} 个任务已仅保留大于 {threshold_text} 的文件下载，小文件已跳过。"
                     )
             await application.bot.send_message(
                 chat_id=chat_id,
                 text="\n".join(notes),
                 parse_mode=ParseMode.HTML,
             )
+            return
+
+        if context.name_hint and _is_jav_title(context.name_hint, _get_jav_pattern(application)):
+            await application.bot.send_message(
+                chat_id=chat_id,
+                text=(
+                    "<b>⚠️ JAV 自动分类未完成</b>\n"
+                    f"目标: <b>{escape(context.name_hint)}</b>\n"
+                    "可以稍后发送 `/retryjav <hash>` 重新处理。"
+                ),
+                parse_mode=ParseMode.HTML,
+            )
     except Exception:
         logging.exception("Failed to auto-categorize newly added torrent")
+        await application.bot.send_message(
+            chat_id=chat_id,
+            text=(
+                "<b>⚠️ 后台处理失败</b>\n"
+                "自动分类或文件筛选没有完成，可以稍后发送 `/retryjav <hash>` 重试。"
+            ),
+            parse_mode=ParseMode.HTML,
+        )
 
 
 async def _add_torrent_url(
+    application: Application,
     qbit: QbitClient,
     url: str,
-) -> dict[str, bool | set[str]]:
+) -> dict[str, bool | AddContext]:
     existing_hashes = {item.hash for item in await qbit.list_torrents(filter_name="all")}
-    upload_limit = _MAGNET_UPLOAD_LIMIT_BYTES if url.lower().startswith("magnet:?") else None
+    settings: Settings = application.bot_data["settings"]
+    upload_limit = (
+        _magnet_upload_limit_bytes(settings) if url.lower().startswith("magnet:?") else None
+    )
     await qbit.add_torrent_url_with_options(url, upload_limit=upload_limit)
     return {
         "is_magnet": url.lower().startswith("magnet:?"),
-        "known_hashes": existing_hashes,
+        "context": AddContext(
+            known_hashes=existing_hashes,
+            started_at=int(time.time()),
+            name_hint=_extract_name_hint(url),
+        ),
     }
 
 
@@ -345,6 +469,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             "🗑️ /delete &lt;hash&gt; - 删除任务但保留文件\n"
             "🔥 /deletefiles &lt;hash&gt; - 删除任务和文件\n"
             "➕ /add &lt;magnet或torrent链接&gt; - 添加下载\n"
+            "🔁 /retryjav &lt;hash&gt; - 重新执行 JAV 分类\n"
             "📎 也可以直接发送 magnet、.torrent 或下载直链"
         ),
         parse_mode=ParseMode.HTML,
@@ -428,6 +553,46 @@ def _get_hash_argument(context: ContextTypes.DEFAULT_TYPE) -> str | None:
     return context.args[0].strip()
 
 
+async def retry_jav_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _require_allowed_user(update, context):
+        return
+    torrent_hash = _get_hash_argument(context)
+    if not torrent_hash:
+        await update.message.reply_text("用法: /retryjav <hash>")
+        return
+
+    qbit: QbitClient = context.application.bot_data["qbit"]
+    settings: Settings = context.application.bot_data["settings"]
+    pattern = _get_jav_pattern(context.application)
+    full_hash = await qbit.resolve_hash(torrent_hash)
+    torrent = await qbit.get_torrent(full_hash)
+    if not torrent:
+        await update.message.reply_text("没有找到对应任务。")
+        return
+    if not _is_jav_title(torrent.name, pattern):
+        await update.message.reply_text(
+            "<b>未命中当前 JAV 规则</b>\n"
+            f"当前规则: <code>{escape(settings.jav_name_regex)}</code>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    try:
+        await qbit.create_category(settings.jav_category_name)
+    except Exception:
+        pass
+    await qbit.set_category(full_hash, settings.jav_category_name)
+    filtered = await _apply_jav_file_selection(context.application, qbit, full_hash)
+    state = _get_state(context.application)
+    state.jav_processed_hashes.add(full_hash)
+    _persist_state(context.application)
+
+    notes = [f"<b>已重新处理到 {escape(settings.jav_category_name)}</b>"]
+    if filtered:
+        notes.append(f"📁 已仅保留大于 {_fmt_large_file_threshold(settings)} 的文件下载，小文件已跳过。")
+    await update.message.reply_text("\n".join(notes), parse_mode=ParseMode.HTML)
+
+
 async def pause_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _require_allowed_user(update, context):
         return
@@ -505,16 +670,17 @@ async def add_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     chat = update.effective_chat
     if not chat:
         return
-    result = await _add_torrent_url(qbit, torrent_url)
+    result = await _add_torrent_url(context.application, qbit, torrent_url)
     notes = ["<b>➕ 已提交添加请求</b>"]
     if result["is_magnet"]:
-        notes.append("📤 该 magnet 任务上传限速已设为 30 KB/s")
+        limit_kib = context.application.bot_data["settings"].magnet_upload_limit_kib
+        notes.append(f"📤 该 magnet 任务上传限速已设为 {limit_kib} KB/s")
     await update.message.reply_text("\n".join(notes), parse_mode=ParseMode.HTML)
     context.application.create_task(
         _background_finalize_torrent(
             context.application,
             qbit,
-            result["known_hashes"],
+            result["context"],
             chat.id,
         )
     )
@@ -544,24 +710,25 @@ async def text_link_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if not chat:
         return
     magnet_count = 0
-    background_hash_sets: list[set[str]] = []
+    background_contexts: list[AddContext] = []
     for link in candidate_links:
-        result = await _add_torrent_url(qbit, link)
+        result = await _add_torrent_url(context.application, qbit, link)
         if result["is_magnet"]:
             magnet_count += 1
-        background_hash_sets.append(result["known_hashes"])
+        background_contexts.append(result["context"])
 
     if len(candidate_links) == 1:
         notes = ["<b>➕ 已自动识别并添加下载链接</b>"]
         if magnet_count == 1:
-            notes.append("📤 该 magnet 任务上传限速已设为 30 KB/s")
+            limit_kib = context.application.bot_data["settings"].magnet_upload_limit_kib
+            notes.append(f"📤 该 magnet 任务上传限速已设为 {limit_kib} KB/s")
         await message.reply_text("\n".join(notes), parse_mode=ParseMode.HTML)
-        for known_hashes in background_hash_sets:
+        for add_context in background_contexts:
             context.application.create_task(
                 _background_finalize_torrent(
                     context.application,
                     qbit,
-                    known_hashes,
+                    add_context,
                     chat.id,
                 )
             )
@@ -569,17 +736,20 @@ async def text_link_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     extra_notes: list[str] = []
     if magnet_count:
-        extra_notes.append(f"📤 其中 {magnet_count} 个 magnet 任务上传限速已设为 30 KB/s")
+        limit_kib = context.application.bot_data["settings"].magnet_upload_limit_kib
+        extra_notes.append(
+            f"📤 其中 {magnet_count} 个 magnet 任务上传限速已设为 {limit_kib} KB/s"
+        )
     await message.reply_text(
         "\n".join([f"<b>➕ 已自动识别并添加 {len(candidate_links)} 个下载链接</b>", *extra_notes]),
         parse_mode=ParseMode.HTML,
     )
-    for known_hashes in background_hash_sets:
+    for add_context in background_contexts:
         context.application.create_task(
             _background_finalize_torrent(
                 context.application,
                 qbit,
-                known_hashes,
+                add_context,
                 chat.id,
             )
         )
@@ -590,6 +760,7 @@ async def error_handler(_: object, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def post_init(application: Application) -> None:
+    settings: Settings = application.bot_data["settings"]
     await application.bot.set_my_commands(
         [
             BotCommand("start", "显示欢迎信息和命令说明"),
@@ -602,13 +773,21 @@ async def post_init(application: Application) -> None:
             BotCommand("delete", "删除任务并保留文件"),
             BotCommand("deletefiles", "删除任务和文件"),
             BotCommand("add", "添加磁力链接或 torrent 链接"),
+            BotCommand("retryjav", "重新执行 JAV 分类和文件筛选"),
         ]
     )
+    application.bot_data["jav_name_pattern"] = re.compile(settings.jav_name_regex)
+    state_store = StateStore(settings.state_file_path)
+    state = state_store.load()
+    application.bot_data["state_store"] = state_store
+    application.bot_data["bot_state"] = state
+
     qbit: QbitClient = application.bot_data["qbit"]
     existing = await qbit.list_torrents(filter_name="all")
-    application.bot_data["notified_completed_hashes"] = {
+    state.notified_completed_hashes.update(
         item.hash for item in existing if item.progress >= 1 or item.completion_on > 0
-    }
+    )
+    _persist_state(application)
     application.bot_data["completion_monitor_task"] = asyncio.create_task(
         _notify_completion_loop(application)
     )
@@ -622,6 +801,8 @@ async def post_shutdown(application: Application) -> None:
             await task
         except asyncio.CancelledError:
             pass
+
+    _persist_state(application)
 
     qbit: QbitClient = application.bot_data["qbit"]
     await qbit.close()
@@ -652,6 +833,7 @@ def create_application(settings: Settings) -> Application:
     application.add_handler(CommandHandler("delete", delete_handler))
     application.add_handler(CommandHandler("deletefiles", delete_files_handler))
     application.add_handler(CommandHandler("add", add_handler))
+    application.add_handler(CommandHandler("retryjav", retry_jav_handler))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_link_handler))
     application.add_error_handler(error_handler)
     return application
