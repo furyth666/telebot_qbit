@@ -108,10 +108,21 @@ class QbitClient:
         )
 
     async def add_torrent_url(self, url: str) -> None:
+        await self.add_torrent_url_with_options(url)
+
+    async def add_torrent_url_with_options(
+        self,
+        url: str,
+        *,
+        upload_limit: int | None = None,
+    ) -> None:
+        data: dict[str, Any] = {"urls": url}
+        if upload_limit is not None:
+            data["upLimit"] = upload_limit
         await self._request(
             "POST",
             "/api/v2/torrents/add",
-            data={"urls": url},
+            data=data,
         )
 
     async def resolve_hash(self, hash_prefix: str) -> str:

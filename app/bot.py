@@ -67,6 +67,7 @@ _DIRECT_DOWNLOAD_HINTS = (
     "/download",
     "download.php",
 )
+_MAGNET_UPLOAD_LIMIT_BYTES = 30 * 1024
 
 
 def _fmt_bytes(value: int) -> str:
@@ -176,6 +177,11 @@ def _text_is_link_only(text: str, links: list[str]) -> bool:
         remainder = remainder.replace(link, " ")
     remainder = re.sub(r"[\s,，;；|]+", "", remainder)
     return not remainder
+
+
+async def _add_torrent_url(qbit: QbitClient, url: str) -> None:
+    upload_limit = _MAGNET_UPLOAD_LIMIT_BYTES if url.lower().startswith("magnet:?") else None
+    await qbit.add_torrent_url_with_options(url, upload_limit=upload_limit)
 
 
 async def _require_allowed_user(
@@ -362,7 +368,13 @@ async def add_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
     torrent_url = " ".join(context.args).strip()
     qbit: QbitClient = context.application.bot_data["qbit"]
-    await qbit.add_torrent_url(torrent_url)
+    await _add_torrent_url(qbit, torrent_url)
+    if torrent_url.lower().startswith("magnet:?"):
+        await update.message.reply_text(
+            "<b>➕ 已提交添加请求</b>\n📤 该 magnet 任务上传限速已设为 30 KB/s",
+            parse_mode=ParseMode.HTML,
+        )
+        return
     await update.message.reply_text("<b>➕ 已提交添加请求</b>", parse_mode=ParseMode.HTML)
 
 
@@ -386,15 +398,27 @@ async def text_link_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return
 
     qbit: QbitClient = context.application.bot_data["qbit"]
+    magnet_count = 0
     for link in candidate_links:
-        await qbit.add_torrent_url(link)
+        if link.lower().startswith("magnet:?"):
+            magnet_count += 1
+        await _add_torrent_url(qbit, link)
 
     if len(candidate_links) == 1:
+        if magnet_count == 1:
+            await message.reply_text(
+                "<b>➕ 已自动识别并添加下载链接</b>\n📤 该 magnet 任务上传限速已设为 30 KB/s",
+                parse_mode=ParseMode.HTML,
+            )
+            return
         await message.reply_text("<b>➕ 已自动识别并添加下载链接</b>", parse_mode=ParseMode.HTML)
         return
 
+    extra_note = ""
+    if magnet_count:
+        extra_note = f"\n📤 其中 {magnet_count} 个 magnet 任务上传限速已设为 30 KB/s"
     await message.reply_text(
-        f"<b>➕ 已自动识别并添加 {len(candidate_links)} 个下载链接</b>",
+        f"<b>➕ 已自动识别并添加 {len(candidate_links)} 个下载链接</b>{extra_note}",
         parse_mode=ParseMode.HTML,
     )
 
