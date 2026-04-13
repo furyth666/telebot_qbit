@@ -600,7 +600,7 @@ async def post_init(application: Application) -> None:
     application.bot_data["notified_completed_hashes"] = {
         item.hash for item in existing if item.progress >= 1 or item.completion_on > 0
     }
-    application.bot_data["completion_monitor_task"] = application.create_task(
+    application.bot_data["completion_monitor_task"] = asyncio.create_task(
         _notify_completion_loop(application)
     )
 
