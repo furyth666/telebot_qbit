@@ -16,6 +16,15 @@ class TorrentSummary:
     upspeed: int
     eta: int
     size: int
+    completion_on: int
+
+
+@dataclass
+class TorrentFile:
+    index: int
+    name: str
+    size: int
+    priority: int
 
 
 class QbitClient:
@@ -82,6 +91,7 @@ class QbitClient:
                 upspeed=int(item.get("upspeed", 0)),
                 eta=int(item.get("eta", 0)),
                 size=int(item.get("size", 0)),
+                completion_on=int(item.get("completion_on", 0)),
             )
             for item in items
         ]
@@ -140,6 +150,41 @@ class QbitClient:
             "POST",
             "/api/v2/torrents/setCategory",
             data={"hashes": torrent_hash, "category": category},
+        )
+
+    async def get_torrent_files(self, torrent_hash: str) -> list[TorrentFile]:
+        response = await self._request(
+            "GET",
+            "/api/v2/torrents/files",
+            params={"hash": torrent_hash},
+        )
+        items = response.json()
+        return [
+            TorrentFile(
+                index=int(item["index"]),
+                name=item["name"],
+                size=int(item["size"]),
+                priority=int(item.get("priority", 1)),
+            )
+            for item in items
+        ]
+
+    async def set_file_priority(
+        self,
+        torrent_hash: str,
+        file_ids: list[int],
+        priority: int,
+    ) -> None:
+        if not file_ids:
+            return
+        await self._request(
+            "POST",
+            "/api/v2/torrents/filePrio",
+            data={
+                "hash": torrent_hash,
+                "id": "|".join(str(file_id) for file_id in file_ids),
+                "priority": priority,
+            },
         )
 
     async def resolve_hash(self, hash_prefix: str) -> str:

@@ -16,7 +16,7 @@ from telegram.ext import (
 )
 
 from app.config import Settings
-from app.qbit_client import QbitClient, TorrentSummary
+from app.qbit_client import QbitClient, TorrentFile, TorrentSummary
 
 
 _STATE_LABELS = {
@@ -70,6 +70,7 @@ _DIRECT_DOWNLOAD_HINTS = (
 )
 _JAV_CATEGORY_NAME = "JAV"
 _JAV_NAME_PATTERN = re.compile(r"[A-Za-z]{2,}-\d{2,}")
+_LARGE_FILE_THRESHOLD_BYTES = 1024 * 1024 * 1024
 _MAGNET_UPLOAD_LIMIT_BYTES = 30 * 1024
 
 
@@ -189,27 +190,80 @@ def _is_jav_title(name: str) -> bool:
 async def _apply_jav_category_to_new_torrents(
     qbit: QbitClient,
     known_hashes: set[str],
-) -> int:
+) -> list[TorrentSummary]:
     try:
         await qbit.create_category(_JAV_CATEGORY_NAME)
     except Exception:
         pass
-    categorized_hashes: set[str] = set()
+    categorized: dict[str, TorrentSummary] = {}
 
     for _ in range(10):
         torrents = await qbit.list_torrents(filter_name="all")
         new_torrents = [item for item in torrents if item.hash not in known_hashes]
         matched = [item for item in new_torrents if _is_jav_title(item.name)]
         for item in matched:
-            if item.hash in categorized_hashes:
+            if item.hash in categorized:
                 continue
             await qbit.set_category(item.hash, _JAV_CATEGORY_NAME)
-            categorized_hashes.add(item.hash)
-        if categorized_hashes:
-            return len(categorized_hashes)
+            categorized[item.hash] = item
+        if categorized:
+            return list(categorized.values())
         await asyncio.sleep(1)
 
-    return 0
+    return []
+
+
+async def _apply_jav_file_selection(qbit: QbitClient, torrent_hash: str) -> bool:
+    for _ in range(10):
+        files = await qbit.get_torrent_files(torrent_hash)
+        if not files:
+            await asyncio.sleep(1)
+            continue
+
+        large_files = [item for item in files if item.size > _LARGE_FILE_THRESHOLD_BYTES]
+        small_files = [item for item in files if item.size <= _LARGE_FILE_THRESHOLD_BYTES]
+        if not large_files or not small_files:
+            return False
+
+        await qbit.set_file_priority(torrent_hash, [item.index for item in large_files], 1)
+        await qbit.set_file_priority(torrent_hash, [item.index for item in small_files], 0)
+        return True
+
+    return False
+
+
+async def _notify_completion_loop(application: Application) -> None:
+    settings: Settings = application.bot_data["settings"]
+    qbit: QbitClient = application.bot_data["qbit"]
+    notified_hashes: set[str] = application.bot_data["notified_completed_hashes"]
+
+    while True:
+        try:
+            torrents = await qbit.list_torrents(filter_name="all")
+            for item in torrents:
+                if item.hash in notified_hashes:
+                    continue
+                if item.progress < 1 and item.completion_on <= 0:
+                    continue
+
+                notified_hashes.add(item.hash)
+                text = (
+                    "<b>✅ 种子下载完成</b>\n"
+                    f"📦 <b>{escape(item.name)}</b>\n"
+                    f"🔑 <code>{_short_hash(item.hash)}</code>"
+                )
+                for user_id in settings.telegram_allowed_user_ids:
+                    await application.bot.send_message(
+                        chat_id=user_id,
+                        text=text,
+                        parse_mode=ParseMode.HTML,
+                    )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logging.exception("Failed while checking completed torrents")
+
+        await asyncio.sleep(30)
 
 
 async def _background_finalize_torrent(
@@ -219,18 +273,32 @@ async def _background_finalize_torrent(
     chat_id: int,
 ) -> None:
     try:
-        jav_count = await _apply_jav_category_to_new_torrents(qbit, known_hashes)
-        if jav_count:
-            if jav_count == 1:
-                text = "<b>🗂️ 已自动分类到 JAV</b>\n检测到新任务名称包含“多个字母-多个数字”的格式。"
+        categorized = await _apply_jav_category_to_new_torrents(qbit, known_hashes)
+        if categorized:
+            filtered_count = 0
+            for item in categorized:
+                if await _apply_jav_file_selection(qbit, item.hash):
+                    filtered_count += 1
+
+            if len(categorized) == 1:
+                notes = [
+                    "<b>🗂️ 已自动分类到 JAV</b>",
+                    "检测到新任务名称包含“多个字母-多个数字”的格式。",
+                ]
+                if filtered_count:
+                    notes.append("📁 已仅保留大于 1 GB 的文件下载，小文件已跳过。")
             else:
-                text = (
-                    f"<b>🗂️ 已自动分类 {jav_count} 个任务到 JAV</b>\n"
-                    "检测到这些新任务名称包含“多个字母-多个数字”的格式。"
-                )
+                notes = [
+                    f"<b>🗂️ 已自动分类 {len(categorized)} 个任务到 JAV</b>",
+                    "检测到这些新任务名称包含“多个字母-多个数字”的格式。",
+                ]
+                if filtered_count:
+                    notes.append(
+                        f"📁 其中 {filtered_count} 个任务已仅保留大于 1 GB 的文件下载，小文件已跳过。"
+                    )
             await application.bot.send_message(
                 chat_id=chat_id,
-                text=text,
+                text="\n".join(notes),
                 parse_mode=ParseMode.HTML,
             )
     except Exception:
@@ -238,17 +306,15 @@ async def _background_finalize_torrent(
 
 
 async def _add_torrent_url(
-    application: Application,
     qbit: QbitClient,
     url: str,
-    chat_id: int,
-) -> dict[str, bool]:
+) -> dict[str, bool | set[str]]:
     existing_hashes = {item.hash for item in await qbit.list_torrents(filter_name="all")}
     upload_limit = _MAGNET_UPLOAD_LIMIT_BYTES if url.lower().startswith("magnet:?") else None
     await qbit.add_torrent_url_with_options(url, upload_limit=upload_limit)
-    application.create_task(_background_finalize_torrent(application, qbit, existing_hashes, chat_id))
     return {
         "is_magnet": url.lower().startswith("magnet:?"),
+        "known_hashes": existing_hashes,
     }
 
 
@@ -439,11 +505,19 @@ async def add_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     chat = update.effective_chat
     if not chat:
         return
-    result = await _add_torrent_url(context.application, qbit, torrent_url, chat.id)
+    result = await _add_torrent_url(qbit, torrent_url)
     notes = ["<b>➕ 已提交添加请求</b>"]
     if result["is_magnet"]:
         notes.append("📤 该 magnet 任务上传限速已设为 30 KB/s")
     await update.message.reply_text("\n".join(notes), parse_mode=ParseMode.HTML)
+    context.application.create_task(
+        _background_finalize_torrent(
+            context.application,
+            qbit,
+            result["known_hashes"],
+            chat.id,
+        )
+    )
 
 
 async def text_link_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -470,10 +544,12 @@ async def text_link_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if not chat:
         return
     magnet_count = 0
+    background_hash_sets: list[set[str]] = []
     for link in candidate_links:
-        result = await _add_torrent_url(context.application, qbit, link, chat.id)
+        result = await _add_torrent_url(qbit, link)
         if result["is_magnet"]:
             magnet_count += 1
+        background_hash_sets.append(result["known_hashes"])
 
     if len(candidate_links) == 1:
         notes = ["<b>➕ 已自动识别并添加下载链接</b>"]
@@ -489,6 +565,15 @@ async def text_link_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         "\n".join([f"<b>➕ 已自动识别并添加 {len(candidate_links)} 个下载链接</b>", *extra_notes]),
         parse_mode=ParseMode.HTML,
     )
+    for known_hashes in background_hash_sets:
+        context.application.create_task(
+            _background_finalize_torrent(
+                context.application,
+                qbit,
+                known_hashes,
+                chat.id,
+            )
+        )
 
 
 async def error_handler(_: object, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -510,6 +595,27 @@ async def post_init(application: Application) -> None:
             BotCommand("add", "添加磁力链接或 torrent 链接"),
         ]
     )
+    qbit: QbitClient = application.bot_data["qbit"]
+    existing = await qbit.list_torrents(filter_name="all")
+    application.bot_data["notified_completed_hashes"] = {
+        item.hash for item in existing if item.progress >= 1 or item.completion_on > 0
+    }
+    application.bot_data["completion_monitor_task"] = application.create_task(
+        _notify_completion_loop(application)
+    )
+
+
+async def post_shutdown(application: Application) -> None:
+    task = application.bot_data.get("completion_monitor_task")
+    if task:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    qbit: QbitClient = application.bot_data["qbit"]
+    await qbit.close()
 
 
 def create_application(settings: Settings) -> Application:
@@ -517,6 +623,7 @@ def create_application(settings: Settings) -> Application:
         Application.builder()
         .token(settings.telegram_bot_token)
         .post_init(post_init)
+        .post_shutdown(post_shutdown)
         .build()
     )
     application.bot_data["settings"] = settings
