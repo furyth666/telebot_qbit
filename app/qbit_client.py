@@ -1,0 +1,126 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
+
+import httpx
+
+
+@dataclass
+class TorrentSummary:
+    name: str
+    hash: str
+    state: str
+    progress: float
+    dlspeed: int
+    upspeed: int
+    eta: int
+    size: int
+
+
+class QbitClient:
+    def __init__(self, base_url: str, username: str, password: str) -> None:
+        self.base_url = base_url
+        self.username = username
+        self.password = password
+        self._client = httpx.AsyncClient(
+            base_url=base_url,
+            timeout=20.0,
+            headers={"Referer": base_url},
+        )
+        self._logged_in = False
+
+    async def close(self) -> None:
+        await self._client.aclose()
+
+    async def _ensure_login(self) -> None:
+        if self._logged_in:
+            return
+
+        response = await self._client.post(
+            "/api/v2/auth/login",
+            data={"username": self.username, "password": self.password},
+        )
+        response.raise_for_status()
+
+        if response.text.strip() != "Ok.":
+            raise RuntimeError("qBittorrent 登录失败，请检查账号密码或 WebUI 配置。")
+
+        self._logged_in = True
+
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+        data: dict[str, Any] | None = None,
+    ) -> httpx.Response:
+        await self._ensure_login()
+        response = await self._client.request(method, path, params=params, data=data)
+        response.raise_for_status()
+        return response
+
+    async def get_transfer_info(self) -> dict[str, Any]:
+        response = await self._request("GET", "/api/v2/transfer/info")
+        return response.json()
+
+    async def list_torrents(self, *, filter_name: str = "all") -> list[TorrentSummary]:
+        response = await self._request(
+            "GET",
+            "/api/v2/torrents/info",
+            params={"filter": filter_name, "sort": "added_on", "reverse": "true"},
+        )
+        items = response.json()
+        return [
+            TorrentSummary(
+                name=item["name"],
+                hash=item["hash"],
+                state=item["state"],
+                progress=float(item.get("progress", 0)),
+                dlspeed=int(item.get("dlspeed", 0)),
+                upspeed=int(item.get("upspeed", 0)),
+                eta=int(item.get("eta", 0)),
+                size=int(item.get("size", 0)),
+            )
+            for item in items
+        ]
+
+    async def pause_torrent(self, torrent_hash: str) -> None:
+        await self._request(
+            "POST",
+            "/api/v2/torrents/pause",
+            data={"hashes": torrent_hash},
+        )
+
+    async def resume_torrent(self, torrent_hash: str) -> None:
+        await self._request(
+            "POST",
+            "/api/v2/torrents/resume",
+            data={"hashes": torrent_hash},
+        )
+
+    async def delete_torrent(self, torrent_hash: str, *, delete_files: bool) -> None:
+        await self._request(
+            "POST",
+            "/api/v2/torrents/delete",
+            data={"hashes": torrent_hash, "deleteFiles": str(delete_files).lower()},
+        )
+
+    async def add_torrent_url(self, url: str) -> None:
+        await self._request(
+            "POST",
+            "/api/v2/torrents/add",
+            data={"urls": url},
+        )
+
+    async def resolve_hash(self, hash_prefix: str) -> str:
+        torrents = await self.list_torrents(filter_name="all")
+        matched = [
+            item.hash for item in torrents if item.hash.lower().startswith(hash_prefix.lower())
+        ]
+        if not matched:
+            raise ValueError("没有找到对应的任务 hash。")
+        if len(matched) > 1:
+            raise ValueError("匹配到多个任务，请提供更长一点的 hash。")
+        return matched[0]
