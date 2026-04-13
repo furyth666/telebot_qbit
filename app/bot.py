@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from html import escape
 
 from telegram import BotCommand, Update
@@ -9,6 +10,8 @@ from telegram.ext import (
     Application,
     CommandHandler,
     ContextTypes,
+    MessageHandler,
+    filters,
 )
 
 from app.config import Settings
@@ -56,6 +59,8 @@ _STATE_ICONS = {
     "missingFiles": "📁",
     "error": "❌",
 }
+
+_TORRENT_LINK_PATTERN = re.compile(r"(magnet:\?[^\s]+|https?://[^\s]+(?:\.torrent\b|[^\s]*\.torrent[^\s]*))", re.IGNORECASE)
 
 
 def _fmt_bytes(value: int) -> str:
@@ -141,6 +146,17 @@ def _format_action_result(action: str, torrent_hash: str) -> str:
     )
 
 
+def _extract_torrent_links(text: str) -> list[str]:
+    seen: set[str] = set()
+    links: list[str] = []
+    for match in _TORRENT_LINK_PATTERN.findall(text):
+        candidate = match.strip().strip("<>\"'(),")
+        if candidate and candidate not in seen:
+            seen.add(candidate)
+            links.append(candidate)
+    return links
+
+
 async def _require_allowed_user(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> bool:
@@ -167,7 +183,8 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             "▶️ /resume &lt;hash&gt; - 恢复任务\n"
             "🗑️ /delete &lt;hash&gt; - 删除任务但保留文件\n"
             "🔥 /deletefiles &lt;hash&gt; - 删除任务和文件\n"
-            "➕ /add &lt;magnet或torrent链接&gt; - 添加下载"
+            "➕ /add &lt;magnet或torrent链接&gt; - 添加下载\n"
+            "📎 也可以直接发送 magnet 或 .torrent 链接"
         ),
         parse_mode=ParseMode.HTML,
     )
@@ -328,6 +345,32 @@ async def add_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await update.message.reply_text("<b>➕ 已提交添加请求</b>", parse_mode=ParseMode.HTML)
 
 
+async def text_link_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _require_allowed_user(update, context):
+        return
+    message = update.effective_message
+    text = message.text if message else None
+    if not text:
+        return
+
+    links = _extract_torrent_links(text)
+    if not links:
+        return
+
+    qbit: QbitClient = context.application.bot_data["qbit"]
+    for link in links:
+        await qbit.add_torrent_url(link)
+
+    if len(links) == 1:
+        await message.reply_text("<b>➕ 已自动识别并添加下载链接</b>", parse_mode=ParseMode.HTML)
+        return
+
+    await message.reply_text(
+        f"<b>➕ 已自动识别并添加 {len(links)} 个下载链接</b>",
+        parse_mode=ParseMode.HTML,
+    )
+
+
 async def error_handler(_: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logging.exception("Unhandled bot error", exc_info=context.error)
 
@@ -373,5 +416,6 @@ def create_application(settings: Settings) -> Application:
     application.add_handler(CommandHandler("delete", delete_handler))
     application.add_handler(CommandHandler("deletefiles", delete_files_handler))
     application.add_handler(CommandHandler("add", add_handler))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_link_handler))
     application.add_error_handler(error_handler)
     return application
