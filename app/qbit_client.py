@@ -115,14 +115,31 @@ class QbitClient:
         url: str,
         *,
         upload_limit: int | None = None,
+        category: str | None = None,
     ) -> None:
         data: dict[str, Any] = {"urls": url}
         if upload_limit is not None:
             data["upLimit"] = upload_limit
+        if category:
+            data["category"] = category
         await self._request(
             "POST",
             "/api/v2/torrents/add",
             data=data,
+        )
+
+    async def create_category(self, name: str) -> None:
+        await self._request(
+            "POST",
+            "/api/v2/torrents/createCategory",
+            data={"category": name},
+        )
+
+    async def set_category(self, torrent_hash: str, category: str) -> None:
+        await self._request(
+            "POST",
+            "/api/v2/torrents/setCategory",
+            data={"hashes": torrent_hash, "category": category},
         )
 
     async def resolve_hash(self, hash_prefix: str) -> str:
