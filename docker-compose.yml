@@ -3,9 +3,8 @@ services:
     build: .
     container_name: qbit-telegram-bot
     restart: unless-stopped
+    network_mode: host
     env_file:
       - .env
 
-    # 如果 bot 和 qBittorrent 在同一个 compose 网络内，
-    # QBIT_BASE_URL 可以填 http://qbittorrent:8080
-    # 如果 qBittorrent 在另一台机器或宿主机，请改成对应地址。
+    # 在 unRAID 上使用 host 网络更稳，尤其是宿主机配置了代理时。

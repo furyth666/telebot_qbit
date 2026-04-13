@@ -40,7 +40,7 @@ docker compose up -d --build
 - `QBIT_PASSWORD`: qBittorrent 密码
 - `BOT_LOG_LEVEL`: 日志等级，默认 `INFO`
 - `HTTP_PROXY` / `HTTPS_PROXY`: 如果你的服务器访问 Telegram 需要代理，可以配置
-- `NO_PROXY`: 本地地址直连，建议包含 `127.0.0.1,localhost` 和 qBittorrent 的局埗网地址
+- `NO_PROXY`: 本地地址直连，建议包含 `127.0.0.1,localhost` 和 qBittorrent 的局域网地址
 
 ## 常见部署说明
 
