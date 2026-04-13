@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from html import escape
 
-from telegram import Update
+from telegram import BotCommand, Update
 from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
@@ -173,6 +173,10 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     )
 
 
+async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await start_handler(update, context)
+
+
 async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _require_allowed_user(update, context):
         return
@@ -328,8 +332,30 @@ async def error_handler(_: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logging.exception("Unhandled bot error", exc_info=context.error)
 
 
+async def post_init(application: Application) -> None:
+    await application.bot.set_my_commands(
+        [
+            BotCommand("start", "显示欢迎信息和命令说明"),
+            BotCommand("help", "查看命令帮助"),
+            BotCommand("status", "查看 qBittorrent 整体状态"),
+            BotCommand("list", "查看最近 10 个任务"),
+            BotCommand("active", "查看活动任务"),
+            BotCommand("pause", "暂停任务，用法: /pause <hash>"),
+            BotCommand("resume", "恢复任务，用法: /resume <hash>"),
+            BotCommand("delete", "删除任务并保留文件"),
+            BotCommand("deletefiles", "删除任务和文件"),
+            BotCommand("add", "添加磁力链接或 torrent 链接"),
+        ]
+    )
+
+
 def create_application(settings: Settings) -> Application:
-    application = Application.builder().token(settings.telegram_bot_token).build()
+    application = (
+        Application.builder()
+        .token(settings.telegram_bot_token)
+        .post_init(post_init)
+        .build()
+    )
     application.bot_data["settings"] = settings
     application.bot_data["qbit"] = QbitClient(
         settings.qbit_base_url,
@@ -338,6 +364,7 @@ def create_application(settings: Settings) -> Application:
     )
 
     application.add_handler(CommandHandler("start", start_handler))
+    application.add_handler(CommandHandler("help", help_handler))
     application.add_handler(CommandHandler("status", status_handler))
     application.add_handler(CommandHandler("list", list_handler))
     application.add_handler(CommandHandler("active", active_handler))
