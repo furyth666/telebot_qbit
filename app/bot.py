@@ -69,7 +69,7 @@ _DIRECT_DOWNLOAD_HINTS = (
     "download.php",
 )
 _JAV_CATEGORY_NAME = "JAV"
-_JAV_NAME_PATTERN = re.compile(r"\b[A-Za-z]{2,}-\d{2,}\b")
+_JAV_NAME_PATTERN = re.compile(r"[A-Za-z]{2,}-\d{2,}")
 _MAGNET_UPLOAD_LIMIT_BYTES = 30 * 1024
 
 
@@ -213,11 +213,26 @@ async def _apply_jav_category_to_new_torrents(
 
 
 async def _background_finalize_torrent(
+    application: Application,
     qbit: QbitClient,
     known_hashes: set[str],
+    chat_id: int,
 ) -> None:
     try:
-        await _apply_jav_category_to_new_torrents(qbit, known_hashes)
+        jav_count = await _apply_jav_category_to_new_torrents(qbit, known_hashes)
+        if jav_count:
+            if jav_count == 1:
+                text = "<b>🗂️ 已自动分类到 JAV</b>\n检测到新任务名称包含“多个字母-多个数字”的格式。"
+            else:
+                text = (
+                    f"<b>🗂️ 已自动分类 {jav_count} 个任务到 JAV</b>\n"
+                    "检测到这些新任务名称包含“多个字母-多个数字”的格式。"
+                )
+            await application.bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                parse_mode=ParseMode.HTML,
+            )
     except Exception:
         logging.exception("Failed to auto-categorize newly added torrent")
 
@@ -226,14 +241,14 @@ async def _add_torrent_url(
     application: Application,
     qbit: QbitClient,
     url: str,
+    chat_id: int,
 ) -> dict[str, bool]:
     existing_hashes = {item.hash for item in await qbit.list_torrents(filter_name="all")}
     upload_limit = _MAGNET_UPLOAD_LIMIT_BYTES if url.lower().startswith("magnet:?") else None
     await qbit.add_torrent_url_with_options(url, upload_limit=upload_limit)
-    application.create_task(_background_finalize_torrent(qbit, existing_hashes))
+    application.create_task(_background_finalize_torrent(application, qbit, existing_hashes, chat_id))
     return {
         "is_magnet": url.lower().startswith("magnet:?"),
-        "jav_match_pending": True,
     }
 
 
@@ -421,11 +436,13 @@ async def add_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
     torrent_url = " ".join(context.args).strip()
     qbit: QbitClient = context.application.bot_data["qbit"]
-    result = await _add_torrent_url(context.application, qbit, torrent_url)
+    chat = update.effective_chat
+    if not chat:
+        return
+    result = await _add_torrent_url(context.application, qbit, torrent_url, chat.id)
     notes = ["<b>➕ 已提交添加请求</b>"]
     if result["is_magnet"]:
         notes.append("📤 该 magnet 任务上传限速已设为 30 KB/s")
-    notes.append("🗂️ 符合规则的任务会在后台自动分类到 JAV")
     await update.message.reply_text("\n".join(notes), parse_mode=ParseMode.HTML)
 
 
@@ -449,9 +466,12 @@ async def text_link_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return
 
     qbit: QbitClient = context.application.bot_data["qbit"]
+    chat = update.effective_chat
+    if not chat:
+        return
     magnet_count = 0
     for link in candidate_links:
-        result = await _add_torrent_url(context.application, qbit, link)
+        result = await _add_torrent_url(context.application, qbit, link, chat.id)
         if result["is_magnet"]:
             magnet_count += 1
 
@@ -459,14 +479,12 @@ async def text_link_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         notes = ["<b>➕ 已自动识别并添加下载链接</b>"]
         if magnet_count == 1:
             notes.append("📤 该 magnet 任务上传限速已设为 30 KB/s")
-        notes.append("🗂️ 符合规则的任务会在后台自动分类到 JAV")
         await message.reply_text("\n".join(notes), parse_mode=ParseMode.HTML)
         return
 
     extra_notes: list[str] = []
     if magnet_count:
         extra_notes.append(f"📤 其中 {magnet_count} 个 magnet 任务上传限速已设为 30 KB/s")
-    extra_notes.append("🗂️ 符合规则的任务会在后台自动分类到 JAV")
     await message.reply_text(
         "\n".join([f"<b>➕ 已自动识别并添加 {len(candidate_links)} 个下载链接</b>", *extra_notes]),
         parse_mode=ParseMode.HTML,
