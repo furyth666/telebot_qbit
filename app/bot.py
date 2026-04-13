@@ -60,7 +60,13 @@ _STATE_ICONS = {
     "error": "❌",
 }
 
-_TORRENT_LINK_PATTERN = re.compile(r"(magnet:\?[^\s]+|https?://[^\s]+(?:\.torrent\b|[^\s]*\.torrent[^\s]*))", re.IGNORECASE)
+_URL_PATTERN = re.compile(r"(magnet:\?[^\s]+|https?://[^\s]+)", re.IGNORECASE)
+_DIRECT_DOWNLOAD_HINTS = (
+    ".torrent",
+    "/api/rss/dlv2",
+    "/download",
+    "download.php",
+)
 
 
 def _fmt_bytes(value: int) -> str:
@@ -146,15 +152,30 @@ def _format_action_result(action: str, torrent_hash: str) -> str:
     )
 
 
-def _extract_torrent_links(text: str) -> list[str]:
+def _extract_links(text: str) -> list[str]:
     seen: set[str] = set()
     links: list[str] = []
-    for match in _TORRENT_LINK_PATTERN.findall(text):
+    for match in _URL_PATTERN.findall(text):
         candidate = match.strip().strip("<>\"'(),")
         if candidate and candidate not in seen:
             seen.add(candidate)
             links.append(candidate)
     return links
+
+
+def _looks_like_torrent_link(link: str) -> bool:
+    lowered = link.lower()
+    if lowered.startswith("magnet:?"):
+        return True
+    return any(hint in lowered for hint in _DIRECT_DOWNLOAD_HINTS)
+
+
+def _text_is_link_only(text: str, links: list[str]) -> bool:
+    remainder = text
+    for link in links:
+        remainder = remainder.replace(link, " ")
+    remainder = re.sub(r"[\s,，;；|]+", "", remainder)
+    return not remainder
 
 
 async def _require_allowed_user(
@@ -184,7 +205,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             "🗑️ /delete &lt;hash&gt; - 删除任务但保留文件\n"
             "🔥 /deletefiles &lt;hash&gt; - 删除任务和文件\n"
             "➕ /add &lt;magnet或torrent链接&gt; - 添加下载\n"
-            "📎 也可以直接发送 magnet 或 .torrent 链接"
+            "📎 也可以直接发送 magnet、.torrent 或下载直链"
         ),
         parse_mode=ParseMode.HTML,
     )
@@ -353,20 +374,27 @@ async def text_link_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if not text:
         return
 
-    links = _extract_torrent_links(text)
+    links = _extract_links(text)
     if not links:
         return
 
+    candidate_links = [link for link in links if _looks_like_torrent_link(link)]
+    if not candidate_links and _text_is_link_only(text, links):
+        candidate_links = links
+
+    if not candidate_links:
+        return
+
     qbit: QbitClient = context.application.bot_data["qbit"]
-    for link in links:
+    for link in candidate_links:
         await qbit.add_torrent_url(link)
 
-    if len(links) == 1:
+    if len(candidate_links) == 1:
         await message.reply_text("<b>➕ 已自动识别并添加下载链接</b>", parse_mode=ParseMode.HTML)
         return
 
     await message.reply_text(
-        f"<b>➕ 已自动识别并添加 {len(links)} 个下载链接</b>",
+        f"<b>➕ 已自动识别并添加 {len(candidate_links)} 个下载链接</b>",
         parse_mode=ParseMode.HTML,
     )
 
