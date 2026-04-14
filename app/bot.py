@@ -151,12 +151,25 @@ def _fmt_torrent_caption(item: TorrentSummary, index: int) -> str:
     return f"{index}. {_state_icon(item.state)} <b>{escape(item.name)}</b>"
 
 
+def _fmt_category(value: str) -> str:
+    return value if value else "未分类"
+
+
 def _format_torrent_line(item: TorrentSummary) -> str:
+    commands = " / ".join(
+        [
+            f"<code>/pause {_short_hash(item.hash)}</code>",
+            f"<code>/resume {_short_hash(item.hash)}</code>",
+            f"<code>/delete {_short_hash(item.hash)}</code>",
+        ]
+    )
     return (
-        f"🏷️ 状态: {_fmt_state(escape(item.state))} | 🔑 Hash: <code>{_short_hash(item.hash)}</code>\n"
-        f"📊 进度: <code>{_fmt_progress_bar(item.progress)}</code> {_fmt_progress_text(item.progress)}\n"
-        f"💾 大小: {_fmt_bytes(item.size)} | ⏳ ETA: {_fmt_eta(item.eta)}\n"
-        f"🚦 速度: ⬇️ {_fmt_speed(item.dlspeed)} | ⬆️ {_fmt_speed(item.upspeed)}"
+        f"┣ 🏷️ {_fmt_state(escape(item.state))} | 🗂️ {_fmt_category(escape(item.category))}\n"
+        f"┣ 📊 <code>{_fmt_progress_bar(item.progress)}</code> {_fmt_progress_text(item.progress)}"
+        f" | ⏳ {_fmt_eta(item.eta)}\n"
+        f"┣ 🚦 ⬇️ {_fmt_speed(item.dlspeed)} | ⬆️ {_fmt_speed(item.upspeed)}"
+        f" | 💾 {_fmt_bytes(item.size)}\n"
+        f"┗ 🔑 <code>{_short_hash(item.hash)}</code>  {commands}"
     )
 
 
@@ -170,6 +183,7 @@ def _format_torrent_overview(title: str, torrents: list[TorrentSummary]) -> str:
             f"📦 共 {len(torrents)} 个任务 | ⚡ 活跃 {active_count} 个 | "
             f"✅ 完成 {completed_count} 个 | 💾 总大小 {_fmt_bytes(total_size)}"
         ),
+        "——————————",
     ]
     return "\n".join(lines)
 
@@ -534,7 +548,7 @@ async def _send_torrent_list(
 
     body = "\n\n".join(entries)
     await update.message.reply_text(
-        f"{_format_torrent_overview(title, torrents)}\n\n{body}",
+        f"{_format_torrent_overview(title, torrents)}\n短 hash 可直接用于 `/pause`、`/resume`、`/delete`\n\n{body}",
         parse_mode=ParseMode.HTML,
     )
 
