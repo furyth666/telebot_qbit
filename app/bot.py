@@ -336,8 +336,6 @@ async def _notify_completion_loop(application: Application) -> None:
                 if item.progress < 1 and item.completion_on <= 0:
                     continue
 
-                state.notified_completed_hashes.add(item.hash)
-                _persist_state(application)
                 text = (
                     "<b>✅ 种子下载完成</b>\n"
                     f"📦 <b>{escape(item.name)}</b>\n"
@@ -349,6 +347,8 @@ async def _notify_completion_loop(application: Application) -> None:
                         text=text,
                         parse_mode=ParseMode.HTML,
                     )
+                state.notified_completed_hashes.add(item.hash)
+                _persist_state(application)
         except asyncio.CancelledError:
             raise
         except Exception:

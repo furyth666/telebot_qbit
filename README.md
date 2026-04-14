@@ -55,6 +55,7 @@ docker compose up -d --build
 - 如果 JAV 任务同时包含大文件和小文件，只下载大于 `JAV_LARGE_FILE_THRESHOLD_GB` 的文件
 - 种子下载完成后，bot 会主动发送提醒
 - bot 会把“已通知完成”和“已处理过 JAV 分类”的状态写入 `STATE_FILE_PATH`
+- 建议挂载 `data/` 目录，避免容器重建后丢失通知和处理状态
 
 ## 常见部署说明
 
