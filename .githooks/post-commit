@@ -16,10 +16,10 @@ export QBIT_POST_COMMIT_RUNNING=1
 
 git push --force-with-lease origin "$branch"
 
-if [[ -x "scripts/sync_unraid.sh" ]]; then
-  scripts/sync_unraid.sh
-fi
-
 if [[ -x "scripts/publish_dockerhub.sh" ]]; then
   scripts/publish_dockerhub.sh
+fi
+
+if [[ -x "scripts/sync_unraid.sh" ]]; then
+  scripts/sync_unraid.sh
 fi

@@ -26,10 +26,37 @@ cp .env.example .env
 ```
 
 5. 修改 `.env`
-6. 启动：
+6. 本地启动：
 
 ```bash
 docker compose up -d --build
+```
+
+如果你在 unRAID 上使用 Compose Manager，建议把 compose 项目放在：
+
+```text
+/boot/config/plugins/compose.manager/projects/qbit-telegram-bot/compose.yaml
+```
+
+把运行数据放在：
+
+```text
+/mnt/user/appdata/qbit-telegram-bot
+```
+
+推荐直接使用 Docker Hub 镜像：
+
+```yaml
+services:
+  qbit-telegram-bot:
+    image: furyth666/qbit-telegram-bot:latest
+    container_name: qbit-telegram-bot
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - /mnt/user/appdata/qbit-telegram-bot/.env
+    volumes:
+      - /mnt/user/appdata/qbit-telegram-bot/data:/app/data
 ```
 
 ## 环境变量
@@ -47,6 +74,20 @@ docker compose up -d --build
 - `STATE_FILE_PATH`: bot 持久化状态文件，默认 `data/bot_state.json`
 - `HTTP_PROXY` / `HTTPS_PROXY`: 如果你的服务器访问 Telegram 需要代理，可以配置
 - `NO_PROXY`: 本地地址直连，建议包含 `127.0.0.1,localhost` 和 qBittorrent 的局域网地址
+
+## unRAID 自动部署
+
+当前仓库的自动部署链路是：
+
+1. `git commit`
+2. 自动推送 GitHub
+3. 自动构建并发布 Docker Hub
+4. 自动更新 unRAID 上的 Compose Manager 项目
+
+默认目录：
+
+- Compose 项目: `/boot/config/plugins/compose.manager/projects/qbit-telegram-bot`
+- 运行数据: `/mnt/user/appdata/qbit-telegram-bot`
 
 ## 自动化规则
 
