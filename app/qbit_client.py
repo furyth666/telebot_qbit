@@ -10,6 +10,7 @@ import httpx
 class TorrentSummary:
     name: str
     hash: str
+    category: str
     state: str
     progress: float
     dlspeed: int
@@ -86,6 +87,7 @@ class QbitClient:
             TorrentSummary(
                 name=item["name"],
                 hash=item["hash"],
+                category=item.get("category", ""),
                 state=item["state"],
                 progress=float(item.get("progress", 0)),
                 dlspeed=int(item.get("dlspeed", 0)),
