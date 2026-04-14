@@ -39,6 +39,7 @@ else
 fi
 
 IMAGE_TAG="${UNRAID_DOCKER_IMAGE_TAG:-$(git -C "$PROJECT_DIR" rev-parse --short HEAD)}"
+IMAGE_REF="${IMAGE_REPO}:${IMAGE_TAG}"
 
 mkdir -p "$PROJECT_DIR/.deploy"
 
@@ -57,10 +58,18 @@ rsync -az \
   "$PROJECT_DIR/.env.example" \
   "$UNRAID_USER@$UNRAID_HOST:$UNRAID_APPDATA_DIR/"
 
+docker image inspect "$IMAGE_REF" >/dev/null 2>&1 || {
+  echo "Missing local image: $IMAGE_REF"
+  echo "Run scripts/publish_dockerhub.sh first or build the image locally."
+  exit 1
+}
+
+docker save "$IMAGE_REF" | ssh -i "$UNRAID_SSH_KEY" -p "$UNRAID_PORT" -o StrictHostKeyChecking=no "$UNRAID_USER@$UNRAID_HOST" "docker load"
+
 read -r -d '' REMOTE_COMPOSE <<EOF || true
 services:
   qbit-telegram-bot:
-    image: ${IMAGE_REPO}:${IMAGE_TAG}
+    image: ${IMAGE_REF}
     container_name: qbit-telegram-bot
     restart: unless-stopped
     network_mode: host
@@ -74,7 +83,6 @@ ssh -i "$UNRAID_SSH_KEY" -p "$UNRAID_PORT" -o StrictHostKeyChecking=no "$UNRAID_
   "cat > '$UNRAID_COMPOSE_PROJECT_DIR/$UNRAID_COMPOSE_FILE_NAME' <<'EOF'
 $REMOTE_COMPOSE
 EOF
-docker compose -f '$UNRAID_COMPOSE_PROJECT_DIR/$UNRAID_COMPOSE_FILE_NAME' pull
 docker compose -f '$UNRAID_COMPOSE_PROJECT_DIR/$UNRAID_COMPOSE_FILE_NAME' up -d
 docker ps --filter name=qbit-telegram-bot --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}'
 "
