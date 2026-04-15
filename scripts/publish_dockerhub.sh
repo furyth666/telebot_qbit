@@ -35,13 +35,12 @@ fi
 
 printf '%s' "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
 
-docker build \
+docker buildx build \
+  --platform linux/amd64 \
   -t "${IMAGE_REPO}:${LATEST_TAG}" \
   -t "${IMAGE_REPO}:${IMAGE_TAG}" \
+  --push \
   "$PROJECT_DIR"
-
-docker push "${IMAGE_REPO}:${LATEST_TAG}"
-docker push "${IMAGE_REPO}:${IMAGE_TAG}"
 
 echo "Published ${IMAGE_REPO}:${LATEST_TAG}"
 echo "Published ${IMAGE_REPO}:${IMAGE_TAG}"

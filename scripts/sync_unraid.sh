@@ -4,7 +4,6 @@ set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEPLOY_ENV_FILE="${DEPLOY_ENV_FILE:-$PROJECT_DIR/.deploy/unraid.env}"
-DOCKERHUB_ENV_FILE="${DOCKERHUB_ENV_FILE:-$PROJECT_DIR/.deploy/dockerhub.env}"
 
 if [[ ! -f "$DEPLOY_ENV_FILE" ]]; then
   echo "Missing deploy config: $DEPLOY_ENV_FILE"
@@ -20,26 +19,10 @@ source "$DEPLOY_ENV_FILE"
 : "${UNRAID_USER:?UNRAID_USER is required}"
 : "${UNRAID_SSH_KEY:?UNRAID_SSH_KEY is required}"
 
-if [[ -f "$DOCKERHUB_ENV_FILE" ]]; then
-  # shellcheck disable=SC1090
-  source "$DOCKERHUB_ENV_FILE"
-fi
-
 UNRAID_APPDATA_DIR="${UNRAID_APPDATA_DIR:-${UNRAID_REMOTE_DIR:-/mnt/user/appdata/qbit-telegram-bot}}"
 UNRAID_COMPOSE_PROJECT_DIR="${UNRAID_COMPOSE_PROJECT_DIR:-/boot/config/plugins/compose.manager/projects/qbit-telegram-bot}"
-UNRAID_COMPOSE_FILE_NAME="${UNRAID_COMPOSE_FILE_NAME:-compose.yaml}"
-
-if [[ -n "${UNRAID_DOCKER_IMAGE_REPO:-}" ]]; then
-  IMAGE_REPO="$UNRAID_DOCKER_IMAGE_REPO"
-elif [[ -n "${DOCKERHUB_USERNAME:-}" ]]; then
-  IMAGE_REPO="${DOCKERHUB_USERNAME}/${DOCKERHUB_IMAGE_NAME:-qbit-telegram-bot}"
-else
-  echo "Missing image repository. Set UNRAID_DOCKER_IMAGE_REPO or configure .deploy/dockerhub.env."
-  exit 1
-fi
-
-IMAGE_TAG="${UNRAID_DOCKER_IMAGE_TAG:-$(git -C "$PROJECT_DIR" rev-parse --short HEAD)}"
-IMAGE_REF="${IMAGE_REPO}:${IMAGE_TAG}"
+UNRAID_COMPOSE_FILE_NAME="${UNRAID_COMPOSE_FILE_NAME:-docker-compose.yml}"
+UNRAID_PROJECT_NAME="${UNRAID_PROJECT_NAME:-qbit-telegram-bot}"
 
 mkdir -p "$PROJECT_DIR/.deploy"
 
@@ -50,26 +33,24 @@ RSYNC_RSH=(ssh -i "$UNRAID_SSH_KEY" -p "$UNRAID_PORT" -o StrictHostKeyChecking=n
 ssh -i "$UNRAID_SSH_KEY" -p "$UNRAID_PORT" -o StrictHostKeyChecking=no "$UNRAID_USER@$UNRAID_HOST" \
   "mkdir -p '$UNRAID_APPDATA_DIR/data' '$UNRAID_COMPOSE_PROJECT_DIR'"
 
-rsync -az \
+rsync -az --delete \
+  --filter "protect .env" \
+  --filter "protect data/" \
   --exclude ".git/" \
   --exclude ".deploy/" \
+  --exclude ".env" \
+  --exclude "data/" \
+  --exclude "__pycache__/" \
+  --exclude "*.pyc" \
   -e "${RSYNC_RSH[*]}" \
-  "$PROJECT_DIR/README.md" \
-  "$PROJECT_DIR/.env.example" \
-  "$UNRAID_USER@$UNRAID_HOST:$UNRAID_APPDATA_DIR/"
-
-docker image inspect "$IMAGE_REF" >/dev/null 2>&1 || {
-  echo "Missing local image: $IMAGE_REF"
-  echo "Run scripts/publish_dockerhub.sh first or build the image locally."
-  exit 1
-}
-
-docker save "$IMAGE_REF" | ssh -i "$UNRAID_SSH_KEY" -p "$UNRAID_PORT" -o StrictHostKeyChecking=no "$UNRAID_USER@$UNRAID_HOST" "docker load"
+  "$PROJECT_DIR"/ "$UNRAID_USER@$UNRAID_HOST:$UNRAID_APPDATA_DIR/"
 
 read -r -d '' REMOTE_COMPOSE <<EOF || true
+name: ${UNRAID_PROJECT_NAME}
+
 services:
   qbit-telegram-bot:
-    image: ${IMAGE_REF}
+    build: ${UNRAID_APPDATA_DIR}
     container_name: qbit-telegram-bot
     restart: unless-stopped
     network_mode: host
@@ -83,6 +64,9 @@ ssh -i "$UNRAID_SSH_KEY" -p "$UNRAID_PORT" -o StrictHostKeyChecking=no "$UNRAID_
   "cat > '$UNRAID_COMPOSE_PROJECT_DIR/$UNRAID_COMPOSE_FILE_NAME' <<'EOF'
 $REMOTE_COMPOSE
 EOF
-docker compose -f '$UNRAID_COMPOSE_PROJECT_DIR/$UNRAID_COMPOSE_FILE_NAME' up -d
+printf '%s' '$UNRAID_PROJECT_NAME' > '$UNRAID_COMPOSE_PROJECT_DIR/name'
+printf 'true' > '$UNRAID_COMPOSE_PROJECT_DIR/autostart'
+rm -f '$UNRAID_COMPOSE_PROJECT_DIR/compose.yaml'
+docker compose -f '$UNRAID_COMPOSE_PROJECT_DIR/$UNRAID_COMPOSE_FILE_NAME' up -d --build
 docker ps --filter name=qbit-telegram-bot --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}'
 "
