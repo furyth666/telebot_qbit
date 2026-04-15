@@ -79,6 +79,7 @@ EOF
 printf '%s' '$UNRAID_PROJECT_NAME' > '$UNRAID_COMPOSE_PROJECT_DIR/name'
 printf 'true' > '$UNRAID_COMPOSE_PROJECT_DIR/autostart'
 rm -f '$UNRAID_COMPOSE_PROJECT_DIR/compose.yaml'
+docker rm -f qbit-telegram-bot >/dev/null 2>&1 || true
 docker compose -f '$UNRAID_COMPOSE_PROJECT_DIR/$UNRAID_COMPOSE_FILE_NAME' up -d --build
 docker ps --filter name=qbit-telegram-bot --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}'
 "

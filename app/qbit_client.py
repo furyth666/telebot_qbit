@@ -72,6 +72,27 @@ class QbitClient:
         response.raise_for_status()
         return response
 
+    async def _request_with_fallbacks(
+        self,
+        method: str,
+        paths: list[str],
+        *,
+        params: dict[str, Any] | None = None,
+        data: dict[str, Any] | None = None,
+    ) -> httpx.Response:
+        last_error: httpx.HTTPStatusError | None = None
+        for path in paths:
+            try:
+                return await self._request(method, path, params=params, data=data)
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code == 404:
+                    last_error = exc
+                    continue
+                raise
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("qBittorrent 请求失败，未找到可用接口。")
+
     async def get_transfer_info(self) -> dict[str, Any]:
         response = await self._request("GET", "/api/v2/transfer/info")
         return response.json()
@@ -108,16 +129,16 @@ class QbitClient:
         return None
 
     async def pause_torrent(self, torrent_hash: str) -> None:
-        await self._request(
+        await self._request_with_fallbacks(
             "POST",
-            "/api/v2/torrents/pause",
+            ["/api/v2/torrents/stop", "/api/v2/torrents/pause"],
             data={"hashes": torrent_hash},
         )
 
     async def resume_torrent(self, torrent_hash: str) -> None:
-        await self._request(
+        await self._request_with_fallbacks(
             "POST",
-            "/api/v2/torrents/resume",
+            ["/api/v2/torrents/start", "/api/v2/torrents/resume"],
             data={"hashes": torrent_hash},
         )
 
