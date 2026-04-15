@@ -29,6 +29,13 @@ class TorrentFile:
     priority: int
 
 
+@dataclass
+class TorrentProperties:
+    save_path: str
+    share_ratio: float
+    total_uploaded: int
+
+
 class QbitClient:
     def __init__(self, base_url: str, username: str, password: str) -> None:
         self.base_url = base_url
@@ -127,6 +134,19 @@ class QbitClient:
             if item.hash == torrent_hash:
                 return item
         return None
+
+    async def get_torrent_properties(self, torrent_hash: str) -> TorrentProperties:
+        response = await self._request(
+            "GET",
+            "/api/v2/torrents/properties",
+            params={"hash": torrent_hash},
+        )
+        item = response.json()
+        return TorrentProperties(
+            save_path=str(item.get("save_path", "")),
+            share_ratio=float(item.get("share_ratio", 0)),
+            total_uploaded=int(item.get("total_uploaded", 0)),
+        )
 
     async def pause_torrent(self, torrent_hash: str) -> None:
         await self._request_with_fallbacks(

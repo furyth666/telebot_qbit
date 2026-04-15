@@ -9,10 +9,11 @@ from html import escape
 from urllib.parse import parse_qs, unquote, urlparse
 
 import httpx
-from telegram import BotCommand, Update
+from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
@@ -157,20 +158,13 @@ def _fmt_category(value: str) -> str:
 
 
 def _format_torrent_line(item: TorrentSummary) -> str:
-    commands = " / ".join(
-        [
-            f"<code>/pause {_short_hash(item.hash)}</code>",
-            f"<code>/resume {_short_hash(item.hash)}</code>",
-            f"<code>/delete {_short_hash(item.hash)}</code>",
-        ]
-    )
     return (
         f"┣ 🏷️ {_fmt_state(escape(item.state))} | 🗂️ {_fmt_category(escape(item.category))}\n"
         f"┣ 📊 <code>{_fmt_progress_bar(item.progress)}</code> {_fmt_progress_text(item.progress)}"
         f" | ⏳ {_fmt_eta(item.eta)}\n"
         f"┣ 🚦 ⬇️ {_fmt_speed(item.dlspeed)} | ⬆️ {_fmt_speed(item.upspeed)}"
         f" | 💾 {_fmt_bytes(item.size)}\n"
-        f"┗ 🔑 <code>{_short_hash(item.hash)}</code>  {commands}"
+        f"┗ 🔑 <code>{_short_hash(item.hash)}</code>"
     )
 
 
@@ -196,6 +190,104 @@ def _format_action_result(action: str, torrent_hash: str) -> str:
             f"🔑 任务 Hash: <code>{escape(torrent_hash)}</code>",
         ]
     )
+
+
+def _fmt_timestamp(value: int) -> str:
+    if value <= 0:
+        return "未记录"
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(value))
+
+
+def _callback_data(action: str, payload: str, view: str = "all") -> str:
+    return f"tor:{action}:{view}:{payload}"
+
+
+def _build_list_keyboard(
+    torrents: list[TorrentSummary],
+    *,
+    filter_name: str,
+) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(
+                f"详情 {_short_hash(item.hash)}",
+                callback_data=_callback_data("detail", item.hash, filter_name),
+            )
+        ]
+        for item in torrents
+    ]
+    return InlineKeyboardMarkup(rows)
+
+
+def _build_detail_keyboard(
+    item: TorrentSummary,
+    *,
+    view: str,
+) -> InlineKeyboardMarkup:
+    primary_action = (
+        InlineKeyboardButton("▶️ 恢复", callback_data=_callback_data("resume", item.hash, view))
+        if item.state in {"pausedDL", "pausedUP", "stoppedDL", "stoppedUP"}
+        else InlineKeyboardButton("⏸️ 暂停", callback_data=_callback_data("pause", item.hash, view))
+    )
+    rows = [
+        [primary_action, InlineKeyboardButton("🔄 刷新", callback_data=_callback_data("detail", item.hash, view))],
+        [
+            InlineKeyboardButton("🗑️ 删除任务", callback_data=_callback_data("delete", item.hash, view)),
+            InlineKeyboardButton("🔥 删除含文件", callback_data=_callback_data("deletefiles", item.hash, view)),
+        ],
+    ]
+    return InlineKeyboardMarkup(rows)
+
+
+def filter_name_to_view(view: str) -> str:
+    return "active" if view == "active" else "all"
+
+
+async def _render_torrent_detail(
+    application: Application,
+    torrent_hash: str,
+    *,
+    view: str = "all",
+) -> tuple[str, InlineKeyboardMarkup]:
+    qbit: QbitClient = application.bot_data["qbit"]
+    item = await qbit.get_torrent(torrent_hash)
+    if not item:
+        raise ValueError("没有找到对应任务。")
+
+    files = await qbit.get_torrent_files(torrent_hash)
+    try:
+        props = await qbit.get_torrent_properties(torrent_hash)
+    except Exception:
+        props = None
+
+    preview_lines: list[str] = []
+    for file in files[:5]:
+        flag = "⏭️" if file.priority == 0 else "📄"
+        preview_lines.append(
+            f"{flag} {escape(file.name.rsplit('/', 1)[-1])} ({_fmt_bytes(file.size)})"
+        )
+    if len(files) > 5:
+        preview_lines.append(f"… 还有 {len(files) - 5} 个文件")
+
+    details = [
+        "<b>🎯 种子详情</b>",
+        f"📦 <b>{escape(item.name)}</b>",
+        f"🔑 <code>{escape(item.hash)}</code>",
+        f"🏷️ {_fmt_state(escape(item.state))} | 🗂️ {_fmt_category(escape(item.category))}",
+        f"📊 <code>{_fmt_progress_bar(item.progress)}</code> {_fmt_progress_text(item.progress)} | ⏳ {_fmt_eta(item.eta)}",
+        f"🚦 ⬇️ {_fmt_speed(item.dlspeed)} | ⬆️ {_fmt_speed(item.upspeed)}",
+        f"💾 大小 {_fmt_bytes(item.size)} | 📤 已上传 {_fmt_bytes(props.total_uploaded) if props else '未知'}",
+        f"📈 分享率 {props.share_ratio:.2f}" if props else "📈 分享率 未知",
+        f"🕒 添加时间 {_fmt_timestamp(item.added_on)}",
+        f"✅ 完成时间 {_fmt_timestamp(item.completion_on)}",
+        f"📁 保存路径 {escape(props.save_path) if props and props.save_path else '未提供'}",
+        f"🧾 文件数 {len(files)}",
+    ]
+    if preview_lines:
+        details.append("📄 文件预览")
+        details.extend(preview_lines)
+
+    return "\n".join(details), _build_detail_keyboard(item, view=view)
 
 
 def _extract_links(text: str) -> list[str]:
@@ -479,6 +571,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             "📈 /status - 查看整体状态\n"
             "📋 /list - 查看最近 10 个任务\n"
             "⚡ /active - 查看活动任务\n"
+            "🎯 /detail &lt;hash&gt; - 查看任务详情\n"
             "⏸️ /pause &lt;hash&gt; - 暂停任务\n"
             "▶️ /resume &lt;hash&gt; - 恢复任务\n"
             "🗑️ /delete &lt;hash&gt; - 删除任务但保留文件\n"
@@ -536,22 +629,21 @@ async def _send_torrent_list(
         return
 
     visible_torrents = torrents[:10]
-    entries: list[str] = []
+    await update.message.reply_text(
+        _format_torrent_overview(title, torrents),
+        parse_mode=ParseMode.HTML,
+    )
     for index, item in enumerate(visible_torrents, start=1):
-        entries.append(
+        await update.message.reply_text(
             "\n".join(
                 [
                     _fmt_torrent_caption(item, index),
                     _format_torrent_line(item),
                 ]
-            )
+            ),
+            parse_mode=ParseMode.HTML,
+            reply_markup=_build_list_keyboard([item], filter_name=filter_name),
         )
-
-    body = "\n\n".join(entries)
-    await update.message.reply_text(
-        f"{_format_torrent_overview(title, torrents)}\n短 hash 可直接用于 `/pause`、`/resume`、`/delete`\n\n{body}",
-        parse_mode=ParseMode.HTML,
-    )
 
 
 async def list_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -560,6 +652,23 @@ async def list_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 async def active_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _send_torrent_list(update, context, filter_name="active", title="活动任务")
+
+
+async def detail_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _require_allowed_user(update, context):
+        return
+    torrent_hash = _get_hash_argument(context)
+    if not torrent_hash:
+        await update.message.reply_text("用法: /detail <hash>")
+        return
+    qbit: QbitClient = context.application.bot_data["qbit"]
+    try:
+        full_hash = await qbit.resolve_hash(torrent_hash)
+        text, keyboard = await _render_torrent_detail(context.application, full_hash)
+    except Exception as exc:
+        await _reply_qbit_action_error(update, exc)
+        return
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
 
 
 def _get_hash_argument(context: ContextTypes.DEFAULT_TYPE) -> str | None:
@@ -590,6 +699,13 @@ async def _reply_qbit_action_error(update: Update, error: Exception) -> None:
         )
         return
     await update.message.reply_text(f"操作失败：{error}")
+
+
+async def _callback_action_error(query, error: Exception) -> None:
+    if isinstance(error, httpx.HTTPStatusError):
+        await query.answer(f"qBittorrent 返回 {error.response.status_code}", show_alert=True)
+        return
+    await query.answer(str(error), show_alert=True)
 
 
 async def retry_jav_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -722,6 +838,61 @@ async def delete_files_handler(
     )
 
 
+async def torrent_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _require_allowed_user(update, context):
+        return
+    query = update.callback_query
+    if not query or not query.data:
+        return
+    try:
+        _, action, view, payload = query.data.split(":", 3)
+    except ValueError:
+        return
+
+    qbit: QbitClient = context.application.bot_data["qbit"]
+
+    try:
+        if action == "detail":
+            text, keyboard = await _render_torrent_detail(context.application, payload, view=view)
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
+            await query.answer()
+            return
+
+        if action == "pause":
+            await qbit.pause_torrent(payload)
+            text, keyboard = await _render_torrent_detail(context.application, payload, view=view)
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
+            await query.answer("已暂停")
+            return
+
+        if action == "resume":
+            await qbit.resume_torrent(payload)
+            text, keyboard = await _render_torrent_detail(context.application, payload, view=view)
+            await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
+            await query.answer("已恢复")
+            return
+
+        if action == "delete":
+            await qbit.delete_torrent(payload, delete_files=False)
+            await query.edit_message_text(
+                _format_action_result("已删除任务，保留文件", payload),
+                parse_mode=ParseMode.HTML,
+            )
+            await query.answer("已删除任务")
+            return
+
+        if action == "deletefiles":
+            await qbit.delete_torrent(payload, delete_files=True)
+            await query.edit_message_text(
+                _format_action_result("已删除任务和文件", payload),
+                parse_mode=ParseMode.HTML,
+            )
+            await query.answer("已删除任务和文件")
+            return
+    except Exception as exc:
+        await _callback_action_error(query, exc)
+
+
 async def add_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _require_allowed_user(update, context):
         return
@@ -831,6 +1002,7 @@ async def post_init(application: Application) -> None:
             BotCommand("status", "查看 qBittorrent 整体状态"),
             BotCommand("list", "查看最近 10 个任务"),
             BotCommand("active", "查看活动任务"),
+            BotCommand("detail", "查看任务详情，用法: /detail <hash>"),
             BotCommand("pause", "暂停任务，用法: /pause <hash>"),
             BotCommand("resume", "恢复任务，用法: /resume <hash>"),
             BotCommand("delete", "删除任务并保留文件"),
@@ -891,6 +1063,7 @@ def create_application(settings: Settings) -> Application:
     application.add_handler(CommandHandler("status", status_handler))
     application.add_handler(CommandHandler("list", list_handler))
     application.add_handler(CommandHandler("active", active_handler))
+    application.add_handler(CommandHandler("detail", detail_handler))
     application.add_handler(CommandHandler("pause", pause_handler))
     application.add_handler(CommandHandler("resume", resume_handler))
     application.add_handler(CommandHandler("delete", delete_handler))
@@ -898,5 +1071,6 @@ def create_application(settings: Settings) -> Application:
     application.add_handler(CommandHandler("add", add_handler))
     application.add_handler(CommandHandler("retryjav", retry_jav_handler))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_link_handler))
+    application.add_handler(CallbackQueryHandler(torrent_callback_handler, pattern=r"^tor:"))
     application.add_error_handler(error_handler)
     return application
