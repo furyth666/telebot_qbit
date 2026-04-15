@@ -23,6 +23,10 @@ UNRAID_APPDATA_DIR="${UNRAID_APPDATA_DIR:-${UNRAID_REMOTE_DIR:-/mnt/user/appdata
 UNRAID_COMPOSE_PROJECT_DIR="${UNRAID_COMPOSE_PROJECT_DIR:-/boot/config/plugins/compose.manager/projects/qbit-telegram-bot}"
 UNRAID_COMPOSE_FILE_NAME="${UNRAID_COMPOSE_FILE_NAME:-docker-compose.yml}"
 UNRAID_PROJECT_NAME="${UNRAID_PROJECT_NAME:-qbit-telegram-bot}"
+UNRAID_COMPOSE_ENV_FILE="${UNRAID_COMPOSE_ENV_FILE:-$UNRAID_COMPOSE_PROJECT_DIR/.env}"
+UNRAID_HTTP_PROXY="${UNRAID_HTTP_PROXY:-http://192.168.50.46:7897}"
+UNRAID_HTTPS_PROXY="${UNRAID_HTTPS_PROXY:-http://192.168.50.46:7897}"
+UNRAID_NO_PROXY="${UNRAID_NO_PROXY:-localhost,127.0.0.1,192.168.0.0/16,10.0.0.0/8,172.16.0.0/12,100.64.0.0/10,100.71.223.75,.ts.net,ts.net}"
 
 mkdir -p "$PROJECT_DIR/.deploy"
 
@@ -31,7 +35,11 @@ python3 -m py_compile "$PROJECT_DIR"/app/*.py
 RSYNC_RSH=(ssh -i "$UNRAID_SSH_KEY" -p "$UNRAID_PORT" -o StrictHostKeyChecking=no)
 
 ssh -i "$UNRAID_SSH_KEY" -p "$UNRAID_PORT" -o StrictHostKeyChecking=no "$UNRAID_USER@$UNRAID_HOST" \
-  "mkdir -p '$UNRAID_APPDATA_DIR/data' '$UNRAID_COMPOSE_PROJECT_DIR'"
+  "mkdir -p '$UNRAID_APPDATA_DIR/data' '$UNRAID_COMPOSE_PROJECT_DIR'
+if [ -f '$UNRAID_APPDATA_DIR/.env' ]; then
+  cp '$UNRAID_APPDATA_DIR/.env' '$UNRAID_COMPOSE_ENV_FILE'
+  mv '$UNRAID_APPDATA_DIR/.env' '$UNRAID_APPDATA_DIR/.env.moved_to_compose'
+fi"
 
 rsync -az --delete \
   --filter "protect .env" \
@@ -55,7 +63,11 @@ services:
     restart: unless-stopped
     network_mode: host
     env_file:
-      - ${UNRAID_APPDATA_DIR}/.env
+      - ${UNRAID_COMPOSE_ENV_FILE}
+    environment:
+      - HTTP_PROXY=${UNRAID_HTTP_PROXY}
+      - HTTPS_PROXY=${UNRAID_HTTPS_PROXY}
+      - NO_PROXY=${UNRAID_NO_PROXY}
     volumes:
       - ${UNRAID_APPDATA_DIR}/data:/app/data
 EOF
