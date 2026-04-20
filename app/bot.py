@@ -78,6 +78,8 @@ _CONTEXT_LOOKBACK_SECONDS = 10
 _CONTEXT_POLL_ATTEMPTS = 20
 _CONTEXT_POLL_INTERVAL_SECONDS = 1
 _FILES_POLL_ATTEMPTS = 10
+_JAV_METADATA_POLL_ATTEMPTS = 60
+_JAV_METADATA_POLL_INTERVAL_SECONDS = 5
 
 
 @dataclass(frozen=True)
@@ -85,6 +87,7 @@ class AddContext:
     known_hashes: set[str]
     started_at: int
     name_hint: str | None
+    is_magnet: bool = False
 
 
 def _magnet_upload_limit_bytes(settings: Settings) -> int:
@@ -374,6 +377,9 @@ async def _apply_jav_category_to_new_torrents(
     application: Application,
     qbit: QbitClient,
     context: AddContext,
+    *,
+    attempts: int = _CONTEXT_POLL_ATTEMPTS,
+    interval_seconds: int = _CONTEXT_POLL_INTERVAL_SECONDS,
 ) -> list[TorrentSummary]:
     settings: Settings = application.bot_data["settings"]
     pattern = _get_jav_pattern(application)
@@ -385,7 +391,7 @@ async def _apply_jav_category_to_new_torrents(
         pass
     categorized: dict[str, TorrentSummary] = {}
 
-    for _ in range(_CONTEXT_POLL_ATTEMPTS):
+    for _ in range(attempts):
         torrents = await qbit.list_torrents(filter_name="all")
         new_torrents = [
             item
@@ -400,7 +406,7 @@ async def _apply_jav_category_to_new_torrents(
             categorized[item.hash] = item
         if categorized:
             return list(categorized.values())
-        await asyncio.sleep(_CONTEXT_POLL_INTERVAL_SECONDS)
+        await asyncio.sleep(interval_seconds)
 
     return []
 
@@ -474,6 +480,21 @@ async def _background_finalize_torrent(
         settings: Settings = application.bot_data["settings"]
         threshold_text = _fmt_large_file_threshold(settings)
         categorized = await _apply_jav_category_to_new_torrents(application, qbit, context)
+        late_metadata_match = False
+        if (
+            not categorized
+            and context.is_magnet
+            and context.name_hint
+            and _is_jav_title(context.name_hint, _get_jav_pattern(application))
+        ):
+            categorized = await _apply_jav_category_to_new_torrents(
+                application,
+                qbit,
+                context,
+                attempts=_JAV_METADATA_POLL_ATTEMPTS,
+                interval_seconds=_JAV_METADATA_POLL_INTERVAL_SECONDS,
+            )
+            late_metadata_match = bool(categorized)
         if categorized:
             state = _get_state(application)
             filtered_count = 0
@@ -488,6 +509,8 @@ async def _background_finalize_torrent(
                     f"<b>🗂️ 已自动分类到 {escape(settings.jav_category_name)}</b>",
                     "检测到新任务名称包含“多个字母-多个数字”的格式。",
                 ]
+                if late_metadata_match:
+                    notes.append("🧲 已在 magnet 元数据完成后补判并自动归类。")
                 if filtered_count:
                     notes.append(f"📁 已仅保留大于 {threshold_text} 的文件下载，小文件已跳过。")
             else:
@@ -495,6 +518,8 @@ async def _background_finalize_torrent(
                     f"<b>🗂️ 已自动分类 {len(categorized)} 个任务到 {escape(settings.jav_category_name)}</b>",
                     "检测到这些新任务名称包含“多个字母-多个数字”的格式。",
                 ]
+                if late_metadata_match:
+                    notes.append("🧲 这些任务是在 magnet 元数据完成后补判归类的。")
                 if filtered_count:
                     notes.append(
                         f"📁 其中 {filtered_count} 个任务已仅保留大于 {threshold_text} 的文件下载，小文件已跳过。"
@@ -545,6 +570,7 @@ async def _add_torrent_url(
             known_hashes=existing_hashes,
             started_at=int(time.time()),
             name_hint=_extract_name_hint(url),
+            is_magnet=url.lower().startswith("magnet:?"),
         ),
     }
 
