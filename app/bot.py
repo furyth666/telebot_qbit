@@ -401,6 +401,24 @@ def _fmt_premiere_date(value: str) -> str | None:
     return value.split("T", 1)[0]
 
 
+def _jellyfin_item_url(base_url: str, item: JellyfinItem) -> str:
+    if not base_url or not item.item_id:
+        return ""
+    query = f"id={item.item_id}"
+    if item.server_id:
+        query = f"{query}&serverId={item.server_id}"
+    return f"{base_url}/web/index.html#!/details?{query}"
+
+
+def _jellyfin_person_url(base_url: str, person_id: str, server_id: str) -> str:
+    if not base_url or not person_id:
+        return ""
+    query = f"id={person_id}"
+    if server_id:
+        query = f"{query}&serverId={server_id}"
+    return f"{base_url}/web/index.html#!/details?{query}"
+
+
 def _format_jellyfin_caption(
     code: str,
     item: JellyfinItem,
@@ -422,12 +440,22 @@ def _format_jellyfin_caption(
     if meta_parts:
         lines.append(" | ".join(meta_parts))
     if item.actors:
-        actor_text = " / ".join(item.actors[:5])
+        actor_parts: list[str] = []
+        for actor in item.actors[:5]:
+            actor_url = _jellyfin_person_url(public_base_url, actor.person_id, item.server_id)
+            if actor_url:
+                actor_parts.append(
+                    f'<a href="{escape(actor_url)}">{escape(actor.name)}</a>'
+                )
+            else:
+                actor_parts.append(escape(actor.name))
+        actor_text = " / ".join(actor_parts)
         if len(item.actors) > 5:
             actor_text = f"{actor_text} ..."
-        lines.append(f"🎭 演员: <b>{escape(actor_text)}</b>")
-    if public_base_url:
-        lines.append(f"🌐 Jellyfin: <code>{escape(public_base_url)}</code>")
+        lines.append(f"🎭 演员: {actor_text}")
+    item_url = _jellyfin_item_url(public_base_url, item)
+    if item_url:
+        lines.append(f'🌐 Jellyfin: <a href="{escape(item_url)}">打开视频详情</a>')
     if item.overview:
         overview = item.overview.strip()
         if len(overview) > 300:

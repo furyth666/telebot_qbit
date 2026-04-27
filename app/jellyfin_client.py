@@ -6,14 +6,21 @@ import httpx
 
 
 @dataclass(frozen=True)
+class JellyfinPerson:
+    person_id: str
+    name: str
+
+
+@dataclass(frozen=True)
 class JellyfinItem:
     item_id: str
+    server_id: str
     name: str
     path: str
     overview: str
     production_year: int | None
     premiere_date: str
-    actors: tuple[str, ...]
+    actors: tuple[JellyfinPerson, ...]
 
 
 class JellyfinClient:
@@ -51,6 +58,7 @@ class JellyfinClient:
         return [
             JellyfinItem(
                 item_id=str(item.get("Id", "")),
+                server_id=str(item.get("ServerId", "")),
                 name=str(item.get("Name", "")),
                 path=str(item.get("Path", "")),
                 overview=str(item.get("Overview", "")),
@@ -61,7 +69,10 @@ class JellyfinClient:
                 ),
                 premiere_date=str(item.get("PremiereDate", "")),
                 actors=tuple(
-                    str(person.get("Name", "")).strip()
+                    JellyfinPerson(
+                        person_id=str(person.get("Id", "")),
+                        name=str(person.get("Name", "")).strip(),
+                    )
                     for person in item.get("People", [])
                     if str(person.get("Type", "")).lower() == "actor"
                     and str(person.get("Name", "")).strip()
