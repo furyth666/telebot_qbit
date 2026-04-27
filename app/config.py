@@ -25,6 +25,7 @@ class Settings:
     qbit_base_url: str
     qbit_username: str
     qbit_password: str
+    telegram_mode: str = "polling"
     bot_log_level: str = "INFO"
     jav_category_name: str = "JAV"
     jav_name_regex: str = r"[A-Za-z]{2,}-\d{2,}"
@@ -39,10 +40,16 @@ class Settings:
     watchdog_enabled: bool = True
     watchdog_interval_seconds: int = 300
     watchdog_max_failures: int = 3
+    webhook_base_url: str = ""
+    webhook_listen_host: str = "0.0.0.0"
+    webhook_listen_port: int = 8099
+    webhook_path: str = ""
+    webhook_secret_token: str = ""
 
     @classmethod
     def from_env(cls) -> "Settings":
         return cls(
+            telegram_mode=os.getenv("TELEGRAM_MODE", "polling").strip().lower(),
             telegram_bot_token=os.environ["TELEGRAM_BOT_TOKEN"],
             telegram_allowed_user_ids=_split_user_ids(
                 os.environ["TELEGRAM_ALLOWED_USER_IDS"]
@@ -71,4 +78,9 @@ class Settings:
             watchdog_enabled=_as_bool(os.getenv("WATCHDOG_ENABLED"), True),
             watchdog_interval_seconds=int(os.getenv("WATCHDOG_INTERVAL_SECONDS", "300")),
             watchdog_max_failures=int(os.getenv("WATCHDOG_MAX_FAILURES", "3")),
+            webhook_base_url=os.getenv("WEBHOOK_BASE_URL", "").rstrip("/"),
+            webhook_listen_host=os.getenv("WEBHOOK_LISTEN_HOST", "0.0.0.0"),
+            webhook_listen_port=int(os.getenv("WEBHOOK_LISTEN_PORT", "8099")),
+            webhook_path=os.getenv("WEBHOOK_PATH", "").strip("/"),
+            webhook_secret_token=os.getenv("WEBHOOK_SECRET_TOKEN", ""),
         )

@@ -63,6 +63,7 @@ services:
 
 - `TELEGRAM_BOT_TOKEN`: Telegram 机器人 token
 - `TELEGRAM_ALLOWED_USER_IDS`: 允许访问的 Telegram 用户 ID，多个用逗号分隔
+- `TELEGRAM_MODE`: Telegram 接收模式，`polling` 或 `webhook`
 - `QBIT_BASE_URL`: qBittorrent WebUI 地址
 - `QBIT_USERNAME`: qBittorrent 用户名
 - `QBIT_PASSWORD`: qBittorrent 密码
@@ -80,8 +81,24 @@ services:
 - `WATCHDOG_ENABLED`: 是否启用 bot 自检，默认 `true`
 - `WATCHDOG_INTERVAL_SECONDS`: 自检间隔，默认 `300`
 - `WATCHDOG_MAX_FAILURES`: 连续失败多少次后退出并交给 Docker 重启，默认 `3`
+- `WEBHOOK_BASE_URL`: webhook 公网 HTTPS 地址，例如 `https://qbit-bot.furyth666.com`
+- `WEBHOOK_LISTEN_HOST`: webhook 本地监听地址，默认 `0.0.0.0`
+- `WEBHOOK_LISTEN_PORT`: webhook 本地监听端口，默认 `8099`
+- `WEBHOOK_PATH`: webhook 路径，建议使用随机路径
+- `WEBHOOK_SECRET_TOKEN`: Telegram webhook secret token
 - `HTTP_PROXY` / `HTTPS_PROXY`: 如果你的服务器访问 Telegram 需要代理，可以配置
 - `NO_PROXY`: 本地地址直连，建议包含 `127.0.0.1,localhost` 和 qBittorrent 的局域网地址
+
+## Webhook 模式
+
+使用 Cloudflare Tunnel 时，把 Public Hostname 指向 bot 的本地 webhook 端口：
+
+```text
+Hostname: qbit-bot.furyth666.com
+Service: http://localhost:8099
+```
+
+确认 hostname 可以访问后，把 `.env` 中 `TELEGRAM_MODE` 改为 `webhook`，然后重启容器。
 
 ## unRAID 自动部署
 
