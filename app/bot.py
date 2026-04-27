@@ -11,9 +11,9 @@ from urllib.parse import parse_qs, unquote, urlparse
 import httpx
 from telegram import (
     BotCommand,
-    BufferedInputFile,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    InputFile,
     Update,
 )
 from telegram.constants import ParseMode
@@ -1127,7 +1127,7 @@ async def _reply_jellyfin_lookup(
 
     if image_bytes:
         await update.effective_message.reply_photo(
-            photo=BufferedInputFile(image_bytes, filename=f"{code}.jpg"),
+            photo=InputFile(io.BytesIO(image_bytes), filename=f"{code}.jpg"),
             caption=caption,
             parse_mode=ParseMode.HTML,
         )
