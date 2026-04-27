@@ -12,6 +12,12 @@ def _split_user_ids(raw: str) -> list[int]:
     return user_ids
 
 
+def _as_bool(raw: str | None, default: bool = False) -> bool:
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 @dataclass(frozen=True)
 class Settings:
     telegram_bot_token: str
@@ -25,6 +31,10 @@ class Settings:
     jav_large_file_threshold_gb: float = 1.0
     magnet_upload_limit_kib: int = 30
     state_file_path: str = "data/bot_state.json"
+    jellyfin_base_url: str = ""
+    jellyfin_api_key: str = ""
+    jellyfin_duplicate_delete_enabled: bool = False
+    jellyfin_duplicate_grace_hours: int = 3
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -44,4 +54,13 @@ class Settings:
             ),
             magnet_upload_limit_kib=int(os.getenv("MAGNET_UPLOAD_LIMIT_KIB", "30")),
             state_file_path=os.getenv("STATE_FILE_PATH", "data/bot_state.json"),
+            jellyfin_base_url=os.getenv("JELLYFIN_BASE_URL", "").rstrip("/"),
+            jellyfin_api_key=os.getenv("JELLYFIN_API_KEY", ""),
+            jellyfin_duplicate_delete_enabled=_as_bool(
+                os.getenv("JELLYFIN_DUPLICATE_DELETE_ENABLED"),
+                False,
+            ),
+            jellyfin_duplicate_grace_hours=int(
+                os.getenv("JELLYFIN_DUPLICATE_GRACE_HOURS", "3")
+            ),
         )

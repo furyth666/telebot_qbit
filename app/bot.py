@@ -21,6 +21,7 @@ from telegram.ext import (
 )
 
 from app.config import Settings
+from app.jellyfin_client import JellyfinClient
 from app.qbit_client import QbitClient, TorrentSummary
 from app.state_store import BotState, StateStore
 
@@ -357,6 +358,13 @@ def _is_jav_title(name: str, pattern: re.Pattern[str]) -> bool:
     return bool(pattern.search(name))
 
 
+def _extract_jav_code(name: str, pattern: re.Pattern[str]) -> str | None:
+    match = pattern.search(name)
+    if not match:
+        return None
+    return match.group(0).upper()
+
+
 def _get_jav_pattern(application: Application) -> re.Pattern[str]:
     return application.bot_data["jav_name_pattern"]
 
@@ -371,6 +379,77 @@ def _get_state(application: Application) -> BotState:
 
 def _persist_state(application: Application) -> None:
     _get_state_store(application).save(_get_state(application))
+
+
+def _purge_expired_jellyfin_duplicate_codes(application: Application) -> None:
+    state = _get_state(application)
+    now = int(time.time())
+    active = {
+        code: expires_at
+        for code, expires_at in state.jellyfin_duplicate_codes.items()
+        if expires_at > now
+    }
+    if active != state.jellyfin_duplicate_codes:
+        state.jellyfin_duplicate_codes = active
+        _persist_state(application)
+
+
+async def _handle_jellyfin_duplicate_for_torrent(
+    application: Application,
+    qbit: QbitClient,
+    item: TorrentSummary,
+    *,
+    chat_id: int,
+    is_magnet: bool,
+) -> bool:
+    settings: Settings = application.bot_data["settings"]
+    if not (settings.jellyfin_duplicate_delete_enabled and is_magnet):
+        return False
+
+    jellyfin: JellyfinClient = application.bot_data["jellyfin"]
+    if not jellyfin.enabled:
+        return False
+
+    code = _extract_jav_code(item.name, _get_jav_pattern(application))
+    if not code:
+        return False
+
+    _purge_expired_jellyfin_duplicate_codes(application)
+    state = _get_state(application)
+    expires_at = state.jellyfin_duplicate_codes.get(code, 0)
+    now = int(time.time())
+    if expires_at > now:
+        await application.bot.send_message(
+            chat_id=chat_id,
+            text=(
+                "<b>ℹ️ Jellyfin 同番号短片已存在</b>\n"
+                f"🏷️ 番号: <code>{escape(code)}</code>\n"
+                "这次添加发生在 3 小时豁免窗口内，所以不会自动删除，会保留下载。"
+            ),
+            parse_mode=ParseMode.HTML,
+        )
+        return False
+
+    jellyfin_items = await jellyfin.find_by_code(code)
+    if not jellyfin_items:
+        return False
+
+    await qbit.delete_torrent(item.hash, delete_files=False)
+    state.jellyfin_duplicate_codes[code] = now + settings.jellyfin_duplicate_grace_hours * 3600
+    state.jav_processed_hashes.add(item.hash)
+    _persist_state(application)
+    await application.bot.send_message(
+        chat_id=chat_id,
+        text=(
+            "<b>⚠️ Jellyfin 已存在同番号短片</b>\n"
+            f"🎬 任务: <b>{escape(item.name)}</b>\n"
+            f"🏷️ 番号: <code>{escape(code)}</code>\n"
+            f"📚 Jellyfin: <code>{escape(jellyfin_items[0].path or jellyfin_items[0].name)}</code>\n"
+            "🗑️ 本次已自动删除 qBittorrent 任务；3 小时内如果你再次添加这个番号，bot 将保留下载，不再自动删除。"
+        ),
+        parse_mode=ParseMode.HTML,
+    )
+    return True
 
 
 async def _apply_jav_category_to_new_torrents(
@@ -498,13 +577,26 @@ async def _background_finalize_torrent(
         if categorized:
             state = _get_state(application)
             filtered_count = 0
+            retained_categorized: list[TorrentSummary] = []
             for item in categorized:
+                if await _handle_jellyfin_duplicate_for_torrent(
+                    application,
+                    qbit,
+                    item,
+                    chat_id=chat_id,
+                    is_magnet=context.is_magnet,
+                ):
+                    continue
                 state.jav_processed_hashes.add(item.hash)
+                retained_categorized.append(item)
                 if await _apply_jav_file_selection(application, qbit, item.hash):
                     filtered_count += 1
             _persist_state(application)
 
-            if len(categorized) == 1:
+            if not retained_categorized:
+                return
+
+            if len(retained_categorized) == 1:
                 notes = [
                     f"<b>🗂️ 已自动分类到 {escape(settings.jav_category_name)}</b>",
                     "检测到新任务名称包含“多个字母-多个数字”的格式。",
@@ -515,7 +607,7 @@ async def _background_finalize_torrent(
                     notes.append(f"📁 已仅保留大于 {threshold_text} 的文件下载，小文件已跳过。")
             else:
                 notes = [
-                    f"<b>🗂️ 已自动分类 {len(categorized)} 个任务到 {escape(settings.jav_category_name)}</b>",
+                    f"<b>🗂️ 已自动分类 {len(retained_categorized)} 个任务到 {escape(settings.jav_category_name)}</b>",
                     "检测到这些新任务名称包含“多个字母-多个数字”的格式。",
                 ]
                 if late_metadata_match:
@@ -1067,6 +1159,8 @@ async def post_shutdown(application: Application) -> None:
 
     qbit: QbitClient = application.bot_data["qbit"]
     await qbit.close()
+    jellyfin: JellyfinClient = application.bot_data["jellyfin"]
+    await jellyfin.close()
 
 
 def create_application(settings: Settings) -> Application:
@@ -1082,6 +1176,10 @@ def create_application(settings: Settings) -> Application:
         settings.qbit_base_url,
         settings.qbit_username,
         settings.qbit_password,
+    )
+    application.bot_data["jellyfin"] = JellyfinClient(
+        settings.jellyfin_base_url,
+        settings.jellyfin_api_key,
     )
 
     application.add_handler(CommandHandler("start", start_handler))

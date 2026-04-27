@@ -9,6 +9,7 @@ from pathlib import Path
 class BotState:
     notified_completed_hashes: set[str] = field(default_factory=set)
     jav_processed_hashes: set[str] = field(default_factory=set)
+    jellyfin_duplicate_codes: dict[str, int] = field(default_factory=dict)
 
 
 class StateStore:
@@ -24,6 +25,10 @@ class StateStore:
         self.state = BotState(
             notified_completed_hashes=set(payload.get("notified_completed_hashes", [])),
             jav_processed_hashes=set(payload.get("jav_processed_hashes", [])),
+            jellyfin_duplicate_codes={
+                str(key): int(value)
+                for key, value in payload.get("jellyfin_duplicate_codes", {}).items()
+            },
         )
         return self.state
 
@@ -33,6 +38,7 @@ class StateStore:
         payload = {
             "notified_completed_hashes": sorted(current.notified_completed_hashes),
             "jav_processed_hashes": sorted(current.jav_processed_hashes),
+            "jellyfin_duplicate_codes": current.jellyfin_duplicate_codes,
         }
         self.path.write_text(
             json.dumps(payload, ensure_ascii=True, indent=2),
