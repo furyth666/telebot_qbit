@@ -77,6 +77,9 @@ services:
 - `JELLYFIN_API_KEY`: Jellyfin API Key
 - `JELLYFIN_DUPLICATE_DELETE_ENABLED`: 是否启用 Jellyfin 重复检查
 - `JELLYFIN_DUPLICATE_GRACE_HOURS`: 同番号再次添加的保留窗口，默认 `3`
+- `WATCHDOG_ENABLED`: 是否启用 bot 自检，默认 `true`
+- `WATCHDOG_INTERVAL_SECONDS`: 自检间隔，默认 `300`
+- `WATCHDOG_MAX_FAILURES`: 连续失败多少次后退出并交给 Docker 重启，默认 `3`
 - `HTTP_PROXY` / `HTTPS_PROXY`: 如果你的服务器访问 Telegram 需要代理，可以配置
 - `NO_PROXY`: 本地地址直连，建议包含 `127.0.0.1,localhost` 和 qBittorrent 的局域网地址
 

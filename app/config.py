@@ -36,6 +36,9 @@ class Settings:
     jellyfin_api_key: str = ""
     jellyfin_duplicate_delete_enabled: bool = False
     jellyfin_duplicate_grace_hours: int = 3
+    watchdog_enabled: bool = True
+    watchdog_interval_seconds: int = 300
+    watchdog_max_failures: int = 3
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -65,4 +68,7 @@ class Settings:
             jellyfin_duplicate_grace_hours=int(
                 os.getenv("JELLYFIN_DUPLICATE_GRACE_HOURS", "3")
             ),
+            watchdog_enabled=_as_bool(os.getenv("WATCHDOG_ENABLED"), True),
+            watchdog_interval_seconds=int(os.getenv("WATCHDOG_INTERVAL_SECONDS", "300")),
+            watchdog_max_failures=int(os.getenv("WATCHDOG_MAX_FAILURES", "3")),
         )

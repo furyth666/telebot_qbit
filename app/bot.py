@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+import os
 import re
 import time
 from dataclasses import dataclass
@@ -1277,6 +1278,33 @@ async def error_handler(_: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logging.exception("Unhandled bot error", exc_info=context.error)
 
 
+async def _watchdog_loop(application: Application) -> None:
+    settings: Settings = application.bot_data["settings"]
+    qbit: QbitClient = application.bot_data["qbit"]
+    failures = 0
+
+    while True:
+        await asyncio.sleep(settings.watchdog_interval_seconds)
+        try:
+            await application.bot.get_me()
+            await qbit.get_transfer_info()
+            if failures:
+                logging.info("Watchdog recovered after %s failed check(s)", failures)
+            failures = 0
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            failures += 1
+            logging.exception(
+                "Watchdog health check failed (%s/%s)",
+                failures,
+                settings.watchdog_max_failures,
+            )
+            if failures >= settings.watchdog_max_failures:
+                logging.critical("Watchdog failure limit reached; exiting for Docker restart")
+                os._exit(1)
+
+
 async def post_init(application: Application) -> None:
     settings: Settings = application.bot_data["settings"]
     await application.bot.set_my_commands(
@@ -1311,11 +1339,18 @@ async def post_init(application: Application) -> None:
     application.bot_data["completion_monitor_task"] = asyncio.create_task(
         _notify_completion_loop(application)
     )
+    if settings.watchdog_enabled:
+        application.bot_data["watchdog_task"] = asyncio.create_task(
+            _watchdog_loop(application)
+        )
 
 
 async def post_shutdown(application: Application) -> None:
-    task = application.bot_data.get("completion_monitor_task")
-    if task:
+    tasks = [
+        application.bot_data.get("completion_monitor_task"),
+        application.bot_data.get("watchdog_task"),
+    ]
+    for task in [item for item in tasks if item]:
         task.cancel()
         try:
             await task

@@ -76,6 +76,10 @@ class QbitClient:
     ) -> httpx.Response:
         await self._ensure_login()
         response = await self._client.request(method, path, params=params, data=data)
+        if response.status_code in {401, 403}:
+            self._logged_in = False
+            await self._ensure_login()
+            response = await self._client.request(method, path, params=params, data=data)
         response.raise_for_status()
         return response
 
