@@ -32,6 +32,7 @@ class Settings:
     magnet_upload_limit_kib: int = 30
     state_file_path: str = "data/bot_state.json"
     jellyfin_base_url: str = ""
+    jellyfin_public_base_url: str = ""
     jellyfin_api_key: str = ""
     jellyfin_duplicate_delete_enabled: bool = False
     jellyfin_duplicate_grace_hours: int = 3
@@ -55,6 +56,7 @@ class Settings:
             magnet_upload_limit_kib=int(os.getenv("MAGNET_UPLOAD_LIMIT_KIB", "30")),
             state_file_path=os.getenv("STATE_FILE_PATH", "data/bot_state.json"),
             jellyfin_base_url=os.getenv("JELLYFIN_BASE_URL", "").rstrip("/"),
+            jellyfin_public_base_url=os.getenv("JELLYFIN_PUBLIC_BASE_URL", "").rstrip("/"),
             jellyfin_api_key=os.getenv("JELLYFIN_API_KEY", ""),
             jellyfin_duplicate_delete_enabled=_as_bool(
                 os.getenv("JELLYFIN_DUPLICATE_DELETE_ENABLED"),

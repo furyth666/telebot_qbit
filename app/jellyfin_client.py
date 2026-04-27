@@ -13,6 +13,7 @@ class JellyfinItem:
     overview: str
     production_year: int | None
     premiere_date: str
+    actors: tuple[str, ...]
 
 
 class JellyfinClient:
@@ -42,7 +43,7 @@ class JellyfinClient:
                 "SearchTerm": code,
                 "IncludeItemTypes": "Movie,Episode,Video",
                 "Limit": "10",
-                "Fields": "Path,Overview,ProductionYear,PremiereDate",
+                "Fields": "Path,Overview,ProductionYear,PremiereDate,People",
             },
         )
         response.raise_for_status()
@@ -59,6 +60,12 @@ class JellyfinClient:
                     else None
                 ),
                 premiere_date=str(item.get("PremiereDate", "")),
+                actors=tuple(
+                    str(person.get("Name", "")).strip()
+                    for person in item.get("People", [])
+                    if str(person.get("Type", "")).lower() == "actor"
+                    and str(person.get("Name", "")).strip()
+                ),
             )
             for item in payload.get("Items", [])
         ]

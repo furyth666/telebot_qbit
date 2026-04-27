@@ -401,7 +401,13 @@ def _fmt_premiere_date(value: str) -> str | None:
     return value.split("T", 1)[0]
 
 
-def _format_jellyfin_caption(code: str, item: JellyfinItem, total_count: int) -> str:
+def _format_jellyfin_caption(
+    code: str,
+    item: JellyfinItem,
+    total_count: int,
+    *,
+    public_base_url: str,
+) -> str:
     lines = [
         f"<b>🎬 Jellyfin 查询结果</b>",
         f"🏷️ 番号: <code>{escape(code)}</code>",
@@ -415,8 +421,13 @@ def _format_jellyfin_caption(code: str, item: JellyfinItem, total_count: int) ->
         meta_parts.append(f"🗓️ {premiere_date}")
     if meta_parts:
         lines.append(" | ".join(meta_parts))
-    if item.path:
-        lines.append(f"📂 <code>{escape(item.path)}</code>")
+    if item.actors:
+        actor_text = " / ".join(item.actors[:5])
+        if len(item.actors) > 5:
+            actor_text = f"{actor_text} ..."
+        lines.append(f"🎭 演员: <b>{escape(actor_text)}</b>")
+    if public_base_url:
+        lines.append(f"🌐 Jellyfin: <code>{escape(public_base_url)}</code>")
     if item.overview:
         overview = item.overview.strip()
         if len(overview) > 300:
@@ -1107,6 +1118,7 @@ async def _reply_jellyfin_lookup(
     update: Update, context: ContextTypes.DEFAULT_TYPE, code: str
 ) -> None:
     jellyfin: JellyfinClient = context.application.bot_data["jellyfin"]
+    settings: Settings = context.application.bot_data["settings"]
     if not jellyfin.enabled:
         await update.effective_message.reply_text("Jellyfin 查询未启用。")
         return
@@ -1123,7 +1135,13 @@ async def _reply_jellyfin_lookup(
         return
 
     first_item = _pick_best_jellyfin_match(code, items)
-    caption = _format_jellyfin_caption(code, first_item, len(items))
+    public_base_url = settings.jellyfin_public_base_url or settings.jellyfin_base_url
+    caption = _format_jellyfin_caption(
+        code,
+        first_item,
+        len(items),
+        public_base_url=public_base_url,
+    )
     image_bytes = await jellyfin.get_primary_image_bytes(first_item.item_id)
 
     if image_bytes:

@@ -72,7 +72,8 @@ services:
 - `JAV_LARGE_FILE_THRESHOLD_GB`: JAV 文件筛选阈值，默认 `1`
 - `MAGNET_UPLOAD_LIMIT_KIB`: magnet 上传限速，默认 `30`
 - `STATE_FILE_PATH`: bot 持久化状态文件，默认 `data/bot_state.json`
-- `JELLYFIN_BASE_URL`: Jellyfin 地址，用于检查是否已有同番号短片
+- `JELLYFIN_BASE_URL`: Jellyfin API 地址，用于检查是否已有同番号短片
+- `JELLYFIN_PUBLIC_BASE_URL`: 返回给 Telegram 的 Jellyfin 内网访问地址
 - `JELLYFIN_API_KEY`: Jellyfin API Key
 - `JELLYFIN_DUPLICATE_DELETE_ENABLED`: 是否启用 Jellyfin 重复检查
 - `JELLYFIN_DUPLICATE_GRACE_HOURS`: 同番号再次添加的保留窗口，默认 `3`
