@@ -9,7 +9,13 @@ from html import escape
 from urllib.parse import parse_qs, unquote, urlparse
 
 import httpx
-from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import (
+    BotCommand,
+    BufferedInputFile,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Update,
+)
 from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
@@ -21,7 +27,7 @@ from telegram.ext import (
 )
 
 from app.config import Settings
-from app.jellyfin_client import JellyfinClient
+from app.jellyfin_client import JellyfinClient, JellyfinItem
 from app.qbit_client import QbitClient, TorrentSummary
 from app.state_store import BotState, StateStore
 
@@ -365,6 +371,13 @@ def _extract_jav_code(name: str, pattern: re.Pattern[str]) -> str | None:
     return match.group(0).upper()
 
 
+def _extract_jav_lookup_code(text: str, pattern: re.Pattern[str]) -> str | None:
+    stripped = text.strip()
+    if not stripped or len(stripped) > 80:
+        return None
+    return _extract_jav_code(stripped, pattern)
+
+
 def _get_jav_pattern(application: Application) -> re.Pattern[str]:
     return application.bot_data["jav_name_pattern"]
 
@@ -379,6 +392,56 @@ def _get_state(application: Application) -> BotState:
 
 def _persist_state(application: Application) -> None:
     _get_state_store(application).save(_get_state(application))
+
+
+def _fmt_premiere_date(value: str) -> str | None:
+    if not value:
+        return None
+    return value.split("T", 1)[0]
+
+
+def _format_jellyfin_caption(code: str, item: JellyfinItem, total_count: int) -> str:
+    lines = [
+        f"<b>🎬 Jellyfin 查询结果</b>",
+        f"🏷️ 番号: <code>{escape(code)}</code>",
+        f"📁 标题: <b>{escape(item.name)}</b>",
+    ]
+    meta_parts: list[str] = []
+    if item.production_year:
+        meta_parts.append(f"📅 {item.production_year}")
+    premiere_date = _fmt_premiere_date(item.premiere_date)
+    if premiere_date:
+        meta_parts.append(f"🗓️ {premiere_date}")
+    if meta_parts:
+        lines.append(" | ".join(meta_parts))
+    if item.path:
+        lines.append(f"📂 <code>{escape(item.path)}</code>")
+    if item.overview:
+        overview = item.overview.strip()
+        if len(overview) > 300:
+            overview = f"{overview[:297].rstrip()}..."
+        lines.append(f"📝 {escape(overview)}")
+    if total_count > 1:
+        lines.append(f"🔎 共找到 {total_count} 条匹配，当前展示第 1 条。")
+    return "\n".join(lines)
+
+
+def _pick_best_jellyfin_match(code: str, items: list[JellyfinItem]) -> JellyfinItem:
+    code_lower = code.lower()
+    scored = []
+    for item in items:
+        name = item.name.lower()
+        path = item.path.lower()
+        score = 0
+        if code_lower == name:
+            score += 4
+        if code_lower in name:
+            score += 3
+        if code_lower in path:
+            score += 2
+        scored.append((score, item))
+    scored.sort(key=lambda entry: entry[0], reverse=True)
+    return scored[0][1]
 
 
 def _purge_expired_jellyfin_duplicate_codes(application: Application) -> None:
@@ -695,8 +758,9 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             "🗑️ /delete &lt;hash&gt; - 删除任务但保留文件\n"
             "🔥 /deletefiles &lt;hash&gt; - 删除任务和文件\n"
             "➕ /add &lt;magnet或torrent链接&gt; - 添加下载\n"
+            "🎬 /jav &lt;番号&gt; - 查询 Jellyfin 里的同番号影片\n"
             "🔁 /retryjav &lt;hash&gt; - 重新执行 JAV 分类\n"
-            "📎 也可以直接发送 magnet、.torrent 或下载直链"
+            "📎 也可以直接发送 magnet、.torrent、下载直链，或直接发送番号查询 Jellyfin"
         ),
         parse_mode=ParseMode.HTML,
     )
@@ -1038,6 +1102,58 @@ async def add_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     )
 
 
+async def _reply_jellyfin_lookup(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, code: str
+) -> None:
+    jellyfin: JellyfinClient = context.application.bot_data["jellyfin"]
+    if not jellyfin.enabled:
+        await update.effective_message.reply_text("Jellyfin 查询未启用。")
+        return
+
+    items = await jellyfin.find_by_code(code)
+    if not items:
+        await update.effective_message.reply_text(
+            (
+                "<b>🔎 Jellyfin 未找到匹配</b>\n"
+                f"🏷️ 番号: <code>{escape(code)}</code>"
+            ),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    first_item = _pick_best_jellyfin_match(code, items)
+    caption = _format_jellyfin_caption(code, first_item, len(items))
+    image_bytes = await jellyfin.get_primary_image_bytes(first_item.item_id)
+
+    if image_bytes:
+        await update.effective_message.reply_photo(
+            photo=BufferedInputFile(image_bytes, filename=f"{code}.jpg"),
+            caption=caption,
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    await update.effective_message.reply_text(caption, parse_mode=ParseMode.HTML)
+
+
+async def jellyfin_lookup_handler(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    if not await _require_allowed_user(update, context):
+        return
+    if not context.args:
+        await update.message.reply_text("用法: /jav <番号>")
+        return
+    code = _extract_jav_lookup_code(
+        " ".join(context.args),
+        _get_jav_pattern(context.application),
+    )
+    if not code:
+        await update.message.reply_text("没有识别到有效番号，例如: /jav PRWF-010")
+        return
+    await _reply_jellyfin_lookup(update, context, code)
+
+
 async def text_link_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await _require_allowed_user(update, context):
         return
@@ -1048,6 +1164,9 @@ async def text_link_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     links = _extract_links(text)
     if not links:
+        code = _extract_jav_lookup_code(text, _get_jav_pattern(context.application))
+        if code:
+            await _reply_jellyfin_lookup(update, context, code)
         return
 
     candidate_links = [link for link in links if _looks_like_torrent_link(link)]
@@ -1126,6 +1245,7 @@ async def post_init(application: Application) -> None:
             BotCommand("delete", "删除任务并保留文件"),
             BotCommand("deletefiles", "删除任务和文件"),
             BotCommand("add", "添加磁力链接或 torrent 链接"),
+            BotCommand("jav", "查询 Jellyfin 里的同番号影片"),
             BotCommand("retryjav", "重新执行 JAV 分类和文件筛选"),
         ]
     )
@@ -1193,6 +1313,7 @@ def create_application(settings: Settings) -> Application:
     application.add_handler(CommandHandler("delete", delete_handler))
     application.add_handler(CommandHandler("deletefiles", delete_files_handler))
     application.add_handler(CommandHandler("add", add_handler))
+    application.add_handler(CommandHandler("jav", jellyfin_lookup_handler))
     application.add_handler(CommandHandler("retryjav", retry_jav_handler))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_link_handler))
     application.add_handler(CallbackQueryHandler(torrent_callback_handler, pattern=r"^tor:"))

@@ -10,6 +10,9 @@ class JellyfinItem:
     item_id: str
     name: str
     path: str
+    overview: str
+    production_year: int | None
+    premiere_date: str
 
 
 class JellyfinClient:
@@ -39,7 +42,7 @@ class JellyfinClient:
                 "SearchTerm": code,
                 "IncludeItemTypes": "Movie,Episode,Video",
                 "Limit": "10",
-                "Fields": "Path",
+                "Fields": "Path,Overview,ProductionYear,PremiereDate",
             },
         )
         response.raise_for_status()
@@ -49,6 +52,25 @@ class JellyfinClient:
                 item_id=str(item.get("Id", "")),
                 name=str(item.get("Name", "")),
                 path=str(item.get("Path", "")),
+                overview=str(item.get("Overview", "")),
+                production_year=(
+                    int(item["ProductionYear"])
+                    if item.get("ProductionYear") is not None
+                    else None
+                ),
+                premiere_date=str(item.get("PremiereDate", "")),
             )
             for item in payload.get("Items", [])
         ]
+
+    async def get_primary_image_bytes(self, item_id: str, *, max_width: int = 720) -> bytes | None:
+        if not self.enabled or not item_id:
+            return None
+        response = await self._client.get(
+            f"/Items/{item_id}/Images/Primary",
+            params={"maxWidth": str(max_width), "quality": "90"},
+        )
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        return response.content
