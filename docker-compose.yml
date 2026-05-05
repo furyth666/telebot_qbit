@@ -1,0 +1,12 @@
+services:
+  qbit-telegram-bot:
+    build: .
+    container_name: qbit-telegram-bot
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+
+    # 在 unRAID 上使用 host 网络更稳，尤其是宿主机配置了代理时。

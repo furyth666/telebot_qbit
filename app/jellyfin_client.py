@@ -1,0 +1,94 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import httpx
+
+
+@dataclass(frozen=True)
+class JellyfinPerson:
+    person_id: str
+    name: str
+
+
+@dataclass(frozen=True)
+class JellyfinItem:
+    item_id: str
+    server_id: str
+    name: str
+    path: str
+    overview: str
+    production_year: int | None
+    premiere_date: str
+    actors: tuple[JellyfinPerson, ...]
+
+
+class JellyfinClient:
+    def __init__(self, base_url: str, api_key: str) -> None:
+        self.base_url = base_url
+        self.api_key = api_key
+        self._client = httpx.AsyncClient(
+            base_url=base_url,
+            timeout=20.0,
+            headers={"X-Emby-Token": api_key},
+        )
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.base_url and self.api_key)
+
+    async def close(self) -> None:
+        await self._client.aclose()
+
+    async def find_by_code(self, code: str) -> list[JellyfinItem]:
+        if not self.enabled:
+            return []
+        response = await self._client.get(
+            "/Items",
+            params={
+                "Recursive": "true",
+                "SearchTerm": code,
+                "IncludeItemTypes": "Movie,Episode,Video",
+                "Limit": "10",
+                "Fields": "Path,Overview,ProductionYear,PremiereDate,People",
+            },
+        )
+        response.raise_for_status()
+        payload = response.json()
+        return [
+            JellyfinItem(
+                item_id=str(item.get("Id", "")),
+                server_id=str(item.get("ServerId", "")),
+                name=str(item.get("Name", "")),
+                path=str(item.get("Path", "")),
+                overview=str(item.get("Overview", "")),
+                production_year=(
+                    int(item["ProductionYear"])
+                    if item.get("ProductionYear") is not None
+                    else None
+                ),
+                premiere_date=str(item.get("PremiereDate", "")),
+                actors=tuple(
+                    JellyfinPerson(
+                        person_id=str(person.get("Id", "")),
+                        name=str(person.get("Name", "")).strip(),
+                    )
+                    for person in item.get("People", [])
+                    if str(person.get("Type", "")).lower() == "actor"
+                    and str(person.get("Name", "")).strip()
+                ),
+            )
+            for item in payload.get("Items", [])
+        ]
+
+    async def get_primary_image_bytes(self, item_id: str, *, max_width: int = 720) -> bytes | None:
+        if not self.enabled or not item_id:
+            return None
+        response = await self._client.get(
+            f"/Items/{item_id}/Images/Primary",
+            params={"maxWidth": str(max_width), "quality": "90"},
+        )
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        return response.content
