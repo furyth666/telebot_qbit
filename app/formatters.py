@@ -1,0 +1,309 @@
+from __future__ import annotations
+
+import time
+from html import escape
+
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+from app.config import Settings
+from app.jellyfin_client import JellyfinItem
+from app.qbit_client import TorrentFile, TorrentProperties, TorrentSummary
+
+
+_STATE_LABELS = {
+    "downloading": "⬇️ 下载中",
+    "forcedDL": "🚀 强制下载",
+    "forcedMetaDL": "🧲 强制获取元数据",
+    "metaDL": "🧲 获取元数据",
+    "uploading": "⬆️ 做种中",
+    "forcedUP": "🚀 强制做种",
+    "stalledDL": "⏸️ 等待下载",
+    "stalledUP": "⏸️ 等待上传",
+    "queuedDL": "🕒 排队下载",
+    "queuedUP": "🕒 排队做种",
+    "pausedDL": "⏸️ 已暂停",
+    "pausedUP": "⏸️ 已暂停",
+    "checkingDL": "🔎 校验中",
+    "checkingUP": "🔎 校验中",
+    "checkingResumeData": "🔄 恢复数据校验",
+    "moving": "📦 移动文件中",
+    "missingFiles": "📁 文件缺失",
+    "error": "❌ 错误",
+}
+
+_STATE_ICONS = {
+    "downloading": "⬇️",
+    "forcedDL": "🚀",
+    "forcedMetaDL": "🧲",
+    "metaDL": "🧲",
+    "uploading": "⬆️",
+    "forcedUP": "🚀",
+    "stalledDL": "🟡",
+    "stalledUP": "🟡",
+    "queuedDL": "🕒",
+    "queuedUP": "🕒",
+    "pausedDL": "⏸️",
+    "pausedUP": "⏸️",
+    "checkingDL": "🔎",
+    "checkingUP": "🔎",
+    "checkingResumeData": "🔄",
+    "moving": "📦",
+    "missingFiles": "📁",
+    "error": "❌",
+}
+
+
+def _fmt_large_file_threshold(settings: Settings) -> str:
+    value = settings.jav_large_file_threshold_gb
+    if float(value).is_integer():
+        return f"{int(value)} GB"
+    return f"{value:g} GB"
+
+
+def _fmt_bytes(value: int) -> str:
+    units = ["B", "KB", "MB", "GB", "TB"]
+    size = float(value)
+    for unit in units:
+        if size < 1024 or unit == units[-1]:
+            return f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} TB"
+
+
+def _fmt_speed(value: int) -> str:
+    return f"{_fmt_bytes(value)}/s"
+
+
+def _fmt_eta(value: int) -> str:
+    if value < 0 or value >= 8640000:
+        return "∞"
+    hours, remainder = divmod(value, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours:
+        return f"{hours}h {minutes}m"
+    if minutes:
+        return f"{minutes}m {seconds}s"
+    return f"{seconds}s"
+
+
+def _short_hash(hash_value: str) -> str:
+    return hash_value[:8]
+
+
+def _fmt_state(value: str) -> str:
+    return _STATE_LABELS.get(value, value)
+
+
+def _state_icon(state: str) -> str:
+    return _STATE_ICONS.get(state, "🎯")
+
+
+def _fmt_progress_bar(progress: float, width: int = 10) -> str:
+    filled = max(0, min(width, round(progress * width)))
+    return f"{'█' * filled}{'░' * (width - filled)}"
+
+
+def _fmt_progress_text(progress: float) -> str:
+    return f"{progress * 100:.1f}%"
+
+
+def _fmt_torrent_caption(item: TorrentSummary, index: int) -> str:
+    return f"{index}. {_state_icon(item.state)} <b>{escape(item.name)}</b>"
+
+
+def _fmt_category(value: str) -> str:
+    return value if value else "未分类"
+
+
+def _format_torrent_line(item: TorrentSummary) -> str:
+    return (
+        f"┣ 🏷️ {_fmt_state(escape(item.state))} | 🗂️ {_fmt_category(escape(item.category))}\n"
+        f"┣ 📊 <code>{_fmt_progress_bar(item.progress)}</code> {_fmt_progress_text(item.progress)}"
+        f" | ⏳ {_fmt_eta(item.eta)}\n"
+        f"┣ 🚦 ⬇️ {_fmt_speed(item.dlspeed)} | ⬆️ {_fmt_speed(item.upspeed)}"
+        f" | 💾 {_fmt_bytes(item.size)}\n"
+        f"┗ 🔑 <code>{_short_hash(item.hash)}</code>"
+    )
+
+
+def _format_torrent_overview(title: str, torrents: list[TorrentSummary]) -> str:
+    total_size = sum(item.size for item in torrents)
+    active_count = sum(1 for item in torrents if item.dlspeed > 0 or item.upspeed > 0)
+    completed_count = sum(1 for item in torrents if item.progress >= 1)
+    lines = [
+        f"<b>📋 {escape(title)}</b>",
+        (
+            f"📦 共 {len(torrents)} 个任务 | ⚡ 活跃 {active_count} 个 | "
+            f"✅ 完成 {completed_count} 个 | 💾 总大小 {_fmt_bytes(total_size)}"
+        ),
+        "——————————",
+    ]
+    return "\n".join(lines)
+
+
+def _format_action_result(action: str, torrent_hash: str) -> str:
+    return "\n".join(
+        [
+            f"<b>{escape(action)}</b>",
+            f"🔑 任务 Hash: <code>{escape(torrent_hash)}</code>",
+        ]
+    )
+
+
+def _fmt_timestamp(value: int) -> str:
+    if value <= 0:
+        return "未记录"
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(value))
+
+
+def _callback_data(action: str, payload: str, view: str = "all") -> str:
+    return f"tor:{action}:{view}:{payload}"
+
+
+def _build_list_keyboard(
+    torrents: list[TorrentSummary],
+    *,
+    filter_name: str,
+) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(
+                f"详情 {_short_hash(item.hash)}",
+                callback_data=_callback_data("detail", item.hash, filter_name),
+            )
+        ]
+        for item in torrents
+    ]
+    return InlineKeyboardMarkup(rows)
+
+
+def _build_detail_keyboard(
+    item: TorrentSummary,
+    *,
+    view: str,
+) -> InlineKeyboardMarkup:
+    primary_action = (
+        InlineKeyboardButton("▶️ 恢复", callback_data=_callback_data("resume", item.hash, view))
+        if item.state in {"pausedDL", "pausedUP", "stoppedDL", "stoppedUP"}
+        else InlineKeyboardButton("⏸️ 暂停", callback_data=_callback_data("pause", item.hash, view))
+    )
+    rows = [
+        [primary_action, InlineKeyboardButton("🔄 刷新", callback_data=_callback_data("detail", item.hash, view))],
+        [
+            InlineKeyboardButton("🗑️ 删除任务", callback_data=_callback_data("delete", item.hash, view)),
+            InlineKeyboardButton("🔥 删除含文件", callback_data=_callback_data("deletefiles", item.hash, view)),
+        ],
+    ]
+    return InlineKeyboardMarkup(rows)
+
+
+def filter_name_to_view(view: str) -> str:
+    return "active" if view == "active" else "all"
+
+
+def _format_torrent_detail(
+    item: TorrentSummary,
+    files: list[TorrentFile],
+    props: TorrentProperties | None,
+    *,
+    view: str = "all",
+) -> tuple[str, InlineKeyboardMarkup]:
+    preview_lines: list[str] = []
+    for file in files[:5]:
+        flag = "⏭️" if file.priority == 0 else "📄"
+        preview_lines.append(
+            f"{flag} {escape(file.name.rsplit('/', 1)[-1])} ({_fmt_bytes(file.size)})"
+        )
+    if len(files) > 5:
+        preview_lines.append(f"… 还有 {len(files) - 5} 个文件")
+
+    details = [
+        "<b>🎯 种子详情</b>",
+        f"📦 <b>{escape(item.name)}</b>",
+        f"🔑 <code>{escape(item.hash)}</code>",
+        f"🏷️ {_fmt_state(escape(item.state))} | 🗂️ {_fmt_category(escape(item.category))}",
+        f"📊 <code>{_fmt_progress_bar(item.progress)}</code> {_fmt_progress_text(item.progress)} | ⏳ {_fmt_eta(item.eta)}",
+        f"🚦 ⬇️ {_fmt_speed(item.dlspeed)} | ⬆️ {_fmt_speed(item.upspeed)}",
+        f"💾 大小 {_fmt_bytes(item.size)} | 📤 已上传 {_fmt_bytes(props.total_uploaded) if props else '未知'}",
+        f"📈 分享率 {props.share_ratio:.2f}" if props else "📈 分享率 未知",
+        f"🕒 添加时间 {_fmt_timestamp(item.added_on)}",
+        f"✅ 完成时间 {_fmt_timestamp(item.completion_on)}",
+        f"📁 保存路径 {escape(props.save_path) if props and props.save_path else '未提供'}",
+        f"🧾 文件数 {len(files)}",
+    ]
+    if preview_lines:
+        details.append("📄 文件预览")
+        details.extend(preview_lines)
+
+    return "\n".join(details), _build_detail_keyboard(item, view=view)
+
+
+def _fmt_premiere_date(value: str) -> str | None:
+    if not value:
+        return None
+    return value.split("T", 1)[0]
+
+
+def _jellyfin_item_url(base_url: str, item: JellyfinItem) -> str:
+    if not base_url or not item.item_id:
+        return ""
+    query = f"id={item.item_id}"
+    if item.server_id:
+        query = f"{query}&serverId={item.server_id}"
+    return f"{base_url}/web/index.html#!/details?{query}"
+
+
+def _jellyfin_person_url(base_url: str, person_id: str, server_id: str) -> str:
+    if not base_url or not person_id:
+        return ""
+    query = f"id={person_id}"
+    if server_id:
+        query = f"{query}&serverId={server_id}"
+    return f"{base_url}/web/index.html#!/details?{query}"
+
+
+def _format_jellyfin_caption(
+    code: str,
+    item: JellyfinItem,
+    total_count: int,
+    *,
+    public_base_url: str,
+) -> str:
+    lines = [
+        f"<b>🎬 Jellyfin 查询结果</b>",
+        f"🏷️ 番号: <code>{escape(code)}</code>",
+        f"📁 标题: <b>{escape(item.name)}</b>",
+    ]
+    meta_parts: list[str] = []
+    if item.production_year:
+        meta_parts.append(f"📅 {item.production_year}")
+    premiere_date = _fmt_premiere_date(item.premiere_date)
+    if premiere_date:
+        meta_parts.append(f"🗓️ {premiere_date}")
+    if meta_parts:
+        lines.append(" | ".join(meta_parts))
+    if item.actors:
+        actor_parts: list[str] = []
+        for actor in item.actors[:5]:
+            actor_url = _jellyfin_person_url(public_base_url, actor.person_id, item.server_id)
+            if actor_url:
+                actor_parts.append(
+                    f'<a href="{escape(actor_url)}">{escape(actor.name)}</a>'
+                )
+            else:
+                actor_parts.append(escape(actor.name))
+        actor_text = " / ".join(actor_parts)
+        if len(item.actors) > 5:
+            actor_text = f"{actor_text} ..."
+        lines.append(f"🎭 演员: {actor_text}")
+    item_url = _jellyfin_item_url(public_base_url, item)
+    if item_url:
+        lines.append(f'🌐 Jellyfin: <a href="{escape(item_url)}">打开视频详情</a>')
+    if item.overview:
+        overview = item.overview.strip()
+        if len(overview) > 300:
+            overview = f"{overview[:297].rstrip()}..."
+        lines.append(f"📝 {escape(overview)}")
+    if total_count > 1:
+        lines.append(f"🔎 共找到 {total_count} 条匹配，当前展示第 1 条。")
+    return "\n".join(lines)
