@@ -32,9 +32,17 @@ mkdir -p "$PROJECT_DIR/.deploy"
 
 python3 -m py_compile "$PROJECT_DIR"/app/*.py
 
-RSYNC_RSH=(ssh -i "$UNRAID_SSH_KEY" -p "$UNRAID_PORT" -o StrictHostKeyChecking=no)
+SSH_OPTS=(
+  -F /dev/null
+  -i "$UNRAID_SSH_KEY"
+  -p "$UNRAID_PORT"
+  -o StrictHostKeyChecking=no
+  -o IdentitiesOnly=yes
+  -o PreferredAuthentications=publickey
+)
+RSYNC_RSH=(ssh "${SSH_OPTS[@]}")
 
-ssh -i "$UNRAID_SSH_KEY" -p "$UNRAID_PORT" -o StrictHostKeyChecking=no "$UNRAID_USER@$UNRAID_HOST" \
+ssh "${SSH_OPTS[@]}" "$UNRAID_USER@$UNRAID_HOST" \
   "mkdir -p '$UNRAID_APPDATA_DIR/data' '$UNRAID_COMPOSE_PROJECT_DIR'
 if [ -f '$UNRAID_APPDATA_DIR/.env' ]; then
   cp '$UNRAID_APPDATA_DIR/.env' '$UNRAID_COMPOSE_ENV_FILE'
@@ -72,7 +80,7 @@ services:
       - ${UNRAID_APPDATA_DIR}/data:/app/data
 EOF
 
-ssh -i "$UNRAID_SSH_KEY" -p "$UNRAID_PORT" -o StrictHostKeyChecking=no "$UNRAID_USER@$UNRAID_HOST" \
+ssh "${SSH_OPTS[@]}" "$UNRAID_USER@$UNRAID_HOST" \
   "cat > '$UNRAID_COMPOSE_PROJECT_DIR/$UNRAID_COMPOSE_FILE_NAME' <<'EOF'
 $REMOTE_COMPOSE
 EOF

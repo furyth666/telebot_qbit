@@ -108,6 +108,21 @@ class QbitClient:
         response = await self._request("GET", "/api/v2/transfer/info")
         return response.json()
 
+    def _parse_torrent_summary(self, item: dict[str, Any]) -> TorrentSummary:
+        return TorrentSummary(
+            name=item["name"],
+            hash=item["hash"],
+            category=item.get("category", ""),
+            state=item["state"],
+            progress=float(item.get("progress", 0)),
+            dlspeed=int(item.get("dlspeed", 0)),
+            upspeed=int(item.get("upspeed", 0)),
+            eta=int(item.get("eta", 0)),
+            size=int(item.get("size", 0)),
+            completion_on=int(item.get("completion_on", 0)),
+            added_on=int(item.get("added_on", 0)),
+        )
+
     async def list_torrents(self, *, filter_name: str = "all") -> list[TorrentSummary]:
         response = await self._request(
             "GET",
@@ -115,29 +130,30 @@ class QbitClient:
             params={"filter": filter_name, "sort": "added_on", "reverse": "true"},
         )
         items = response.json()
-        return [
-            TorrentSummary(
-                name=item["name"],
-                hash=item["hash"],
-                category=item.get("category", ""),
-                state=item["state"],
-                progress=float(item.get("progress", 0)),
-                dlspeed=int(item.get("dlspeed", 0)),
-                upspeed=int(item.get("upspeed", 0)),
-                eta=int(item.get("eta", 0)),
-                size=int(item.get("size", 0)),
-                completion_on=int(item.get("completion_on", 0)),
-                added_on=int(item.get("added_on", 0)),
-            )
-            for item in items
-        ]
+        return [self._parse_torrent_summary(item) for item in items]
 
     async def get_torrent(self, torrent_hash: str) -> TorrentSummary | None:
-        torrents = await self.list_torrents(filter_name="all")
-        for item in torrents:
-            if item.hash == torrent_hash:
-                return item
+        response = await self._request(
+            "GET",
+            "/api/v2/torrents/info",
+            params={"hashes": torrent_hash},
+        )
+        items = response.json()
+        for item in items:
+            if item.get("hash", "").lower() == torrent_hash.lower():
+                return self._parse_torrent_summary(item)
         return None
+
+    async def resolve_torrent(self, hash_prefix: str) -> TorrentSummary:
+        torrents = await self.list_torrents(filter_name="all")
+        matched = [
+            item for item in torrents if item.hash.lower().startswith(hash_prefix.lower())
+        ]
+        if not matched:
+            raise ValueError("没有找到对应的任务 hash。")
+        if len(matched) > 1:
+            raise ValueError("匹配到多个任务，请提供更长一点的 hash。")
+        return matched[0]
 
     async def get_torrent_properties(self, torrent_hash: str) -> TorrentProperties:
         response = await self._request(
@@ -244,12 +260,4 @@ class QbitClient:
         )
 
     async def resolve_hash(self, hash_prefix: str) -> str:
-        torrents = await self.list_torrents(filter_name="all")
-        matched = [
-            item.hash for item in torrents if item.hash.lower().startswith(hash_prefix.lower())
-        ]
-        if not matched:
-            raise ValueError("没有找到对应的任务 hash。")
-        if len(matched) > 1:
-            raise ValueError("匹配到多个任务，请提供更长一点的 hash。")
-        return matched[0]
+        return (await self.resolve_torrent(hash_prefix)).hash

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from enum import Enum
 from html import escape
 
 from telegram.constants import ParseMode
@@ -23,11 +24,17 @@ _JAV_METADATA_POLL_ATTEMPTS = 60
 _JAV_METADATA_POLL_INTERVAL_SECONDS = 5
 
 
+class JavFileSelectionResult(Enum):
+    FILTERED = "filtered"
+    NO_FILTER_NEEDED = "no_filter_needed"
+    NOT_READY = "not_ready"
+
+
 def _jav_large_file_threshold_bytes(settings: Settings) -> int:
     return int(settings.jav_large_file_threshold_gb * 1024 * 1024 * 1024)
 
 
-def _purge_expired_jellyfin_duplicate_codes(application: Application) -> None:
+async def _purge_expired_jellyfin_duplicate_codes(application: Application) -> None:
     state = _get_state(application)
     now = int(time.time())
     active = {
@@ -37,7 +44,7 @@ def _purge_expired_jellyfin_duplicate_codes(application: Application) -> None:
     }
     if active != state.jellyfin_duplicate_codes:
         state.jellyfin_duplicate_codes = active
-        _persist_state(application)
+        await _persist_state(application)
 
 
 async def _handle_jellyfin_duplicate_for_torrent(
@@ -60,7 +67,7 @@ async def _handle_jellyfin_duplicate_for_torrent(
     if not code:
         return False
 
-    _purge_expired_jellyfin_duplicate_codes(application)
+    await _purge_expired_jellyfin_duplicate_codes(application)
     state = _get_state(application)
     expires_at = state.jellyfin_duplicate_codes.get(code, 0)
     now = int(time.time())
@@ -83,7 +90,7 @@ async def _handle_jellyfin_duplicate_for_torrent(
     await qbit.delete_torrent(item.hash, delete_files=False)
     state.jellyfin_duplicate_codes[code] = now + settings.jellyfin_duplicate_grace_hours * 3600
     state.jav_processed_hashes.add(item.hash)
-    _persist_state(application)
+    await _persist_state(application)
     await application.bot.send_message(
         chat_id=chat_id,
         text=(
@@ -140,7 +147,7 @@ async def _apply_jav_file_selection(
     application: Application,
     qbit: QbitClient,
     torrent_hash: str,
-) -> bool:
+) -> JavFileSelectionResult:
     threshold = _jav_large_file_threshold_bytes(application.bot_data["settings"])
     for _ in range(_FILES_POLL_ATTEMPTS):
         files = await qbit.get_torrent_files(torrent_hash)
@@ -150,14 +157,23 @@ async def _apply_jav_file_selection(
 
         large_files = [item for item in files if item.size > threshold]
         small_files = [item for item in files if item.size <= threshold]
-        if not large_files or not small_files:
-            return False
+        if not large_files:
+            return JavFileSelectionResult.NO_FILTER_NEEDED
+        if not small_files:
+            return JavFileSelectionResult.NO_FILTER_NEEDED
 
         await qbit.set_file_priority(torrent_hash, [item.index for item in large_files], 1)
-        await qbit.set_file_priority(torrent_hash, [item.index for item in small_files], 0)
-        return True
+        try:
+            await qbit.set_file_priority(torrent_hash, [item.index for item in small_files], 0)
+        except Exception:
+            logging.exception(
+                "Failed to skip small files after enabling large files for torrent %s",
+                torrent_hash,
+            )
+            return JavFileSelectionResult.NOT_READY
+        return JavFileSelectionResult.FILTERED
 
-    return False
+    return JavFileSelectionResult.NOT_READY
 
 
 async def _notify_completion_loop(application: Application) -> None:
@@ -167,13 +183,23 @@ async def _notify_completion_loop(application: Application) -> None:
 
     while True:
         try:
-            torrents = await qbit.list_torrents(filter_name="all")
+            torrents = await qbit.list_torrents(filter_name="completed")
+            active_hashes = {item.hash for item in torrents}
+            stale_hashes = state.notified_completed_hashes - active_hashes
+            if stale_hashes:
+                state.notified_completed_hashes.difference_update(stale_hashes)
+                await _persist_state(application)
+
+            if not application.bot_data.get("completion_monitor_initialized", False):
+                state.notified_completed_hashes.update(item.hash for item in torrents)
+                application.bot_data["completion_monitor_initialized"] = True
+                await _persist_state(application)
+                await asyncio.sleep(30)
+                continue
+
             for item in torrents:
                 if item.hash in state.notified_completed_hashes:
                     continue
-                if item.progress < 1 and item.completion_on <= 0:
-                    continue
-
                 text = (
                     "<b>✅ 种子下载完成</b>\n"
                     f"📦 <b>{escape(item.name)}</b>\n"
@@ -186,7 +212,7 @@ async def _notify_completion_loop(application: Application) -> None:
                         parse_mode=ParseMode.HTML,
                     )
                 state.notified_completed_hashes.add(item.hash)
-                _persist_state(application)
+                await _persist_state(application)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -223,6 +249,7 @@ async def _background_finalize_torrent(
         if categorized:
             state = _get_state(application)
             filtered_count = 0
+            not_ready_count = 0
             retained_categorized: list[TorrentSummary] = []
             for item in categorized:
                 if await _handle_jellyfin_duplicate_for_torrent(
@@ -235,9 +262,12 @@ async def _background_finalize_torrent(
                     continue
                 state.jav_processed_hashes.add(item.hash)
                 retained_categorized.append(item)
-                if await _apply_jav_file_selection(application, qbit, item.hash):
+                selection_result = await _apply_jav_file_selection(application, qbit, item.hash)
+                if selection_result is JavFileSelectionResult.FILTERED:
                     filtered_count += 1
-            _persist_state(application)
+                elif selection_result is JavFileSelectionResult.NOT_READY:
+                    not_ready_count += 1
+            await _persist_state(application)
 
             if not retained_categorized:
                 return
@@ -251,6 +281,8 @@ async def _background_finalize_torrent(
                     notes.append("🧲 已在 magnet 元数据完成后补判并自动归类。")
                 if filtered_count:
                     notes.append(f"📁 已仅保留大于 {threshold_text} 的文件下载，小文件已跳过。")
+                if not_ready_count:
+                    notes.append("⚠️ 文件元数据暂未就绪，尚未完成大小筛选；可以稍后发送 `/retryjav <hash>` 重试。")
             else:
                 notes = [
                     f"<b>🗂️ 已自动分类 {len(retained_categorized)} 个任务到 {escape(settings.jav_category_name)}</b>",
@@ -261,6 +293,10 @@ async def _background_finalize_torrent(
                 if filtered_count:
                     notes.append(
                         f"📁 其中 {filtered_count} 个任务已仅保留大于 {threshold_text} 的文件下载，小文件已跳过。"
+                    )
+                if not_ready_count:
+                    notes.append(
+                        f"⚠️ 其中 {not_ready_count} 个任务文件元数据暂未就绪，尚未完成大小筛选；可以稍后用 `/retryjav <hash>` 重试。"
                     )
             await application.bot.send_message(
                 chat_id=chat_id,

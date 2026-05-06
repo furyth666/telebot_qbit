@@ -8,28 +8,22 @@ from app.config import Settings
 _TELEGRAM_TOKEN_IN_URL = re.compile(r"bot\d{8,12}:AA[A-Za-z0-9_-]+")
 
 
-class _SensitiveLogFilter(logging.Filter):
-    def filter(self, record: logging.LogRecord) -> bool:
-        record.msg = _TELEGRAM_TOKEN_IN_URL.sub("bot<redacted>", str(record.msg))
-        if isinstance(record.args, tuple):
-            record.args = tuple(
-                _TELEGRAM_TOKEN_IN_URL.sub("bot<redacted>", str(item))
-                for item in record.args
-            )
-        elif isinstance(record.args, dict):
-            record.args = {
-                key: _TELEGRAM_TOKEN_IN_URL.sub("bot<redacted>", str(value))
-                for key, value in record.args.items()
-            }
-        return True
+class _SensitiveFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        message = super().format(record)
+        return _TELEGRAM_TOKEN_IN_URL.sub("bot<redacted>", message)
 
 
 def _configure_logging(level: int) -> None:
     logging.basicConfig(
         level=level,
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+        handlers=[
+            logging.StreamHandler(),
+        ],
     )
-    logging.getLogger().addFilter(_SensitiveLogFilter())
+    formatter = _SensitiveFormatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+    for handler in logging.getLogger().handlers:
+        handler.setFormatter(formatter)
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
 

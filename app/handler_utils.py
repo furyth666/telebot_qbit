@@ -39,6 +39,9 @@ async def _resolve_hash_or_reply(
     except ValueError as exc:
         await update.message.reply_text(str(exc))
         return None
+    except Exception as exc:
+        await _reply_qbit_action_error(update, exc)
+        return None
 
 
 async def _reply_qbit_action_error(update: Update, error: Exception) -> None:

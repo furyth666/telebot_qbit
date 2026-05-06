@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 import re
 import time
+from base64 import b32decode
+from binascii import Error as BinasciiError
 from dataclasses import dataclass
 from html import escape
 from urllib.parse import parse_qs, unquote, urlparse
@@ -18,9 +20,9 @@ _URL_PATTERN = re.compile(r"(magnet:\?[^\s,，;；|]+|https?://[^\s,，;；|]+)"
 _DIRECT_DOWNLOAD_HINTS = (
     ".torrent",
     "/api/rss/dlv2",
-    "/download",
     "download.php",
 )
+_KNOWN_HASH_CACHE_TTL_SECONDS = 10
 
 
 @dataclass(frozen=True)
@@ -38,6 +40,13 @@ class AddBatchResult:
     magnet_count: int
     contexts: list[AddContext]
     failures: list[str]
+
+
+@dataclass(frozen=True)
+class AddTorrentResult:
+    is_magnet: bool
+    torrent_hash: str | None
+    context: AddContext
 
 
 def _magnet_upload_limit_bytes(settings: Settings) -> int:
@@ -70,6 +79,13 @@ def _looks_like_torrent_link(link: str) -> bool:
     lowered = link.lower()
     if lowered.startswith("magnet:?"):
         return True
+    parsed = urlparse(lowered)
+    path = parsed.path
+    basename = path.rsplit("/", 1)[-1]
+    if basename.endswith(".torrent") or basename == "download.php":
+        return True
+    if path.rstrip("/") == "/download" or "/api/rss/dlv2" in path:
+        return True
     return any(hint in lowered for hint in _DIRECT_DOWNLOAD_HINTS)
 
 
@@ -96,26 +112,49 @@ def _extract_name_hint(url: str) -> str | None:
     return None
 
 
+def _extract_magnet_hash(url: str) -> str | None:
+    if not url.lower().startswith("magnet:?"):
+        return None
+
+    query = parse_qs(urlparse(url).query)
+    for value in query.get("xt", []):
+        prefix = "urn:btih:"
+        if not value.lower().startswith(prefix):
+            continue
+
+        raw_hash = unquote(value[len(prefix) :]).strip()
+        if re.fullmatch(r"[A-Fa-f0-9]{40}", raw_hash):
+            return raw_hash.lower()
+        if re.fullmatch(r"[A-Za-z2-7]{32}", raw_hash):
+            try:
+                return b32decode(raw_hash.upper()).hex()
+            except (BinasciiError, ValueError):
+                return None
+    return None
+
+
 async def _add_torrent_url(
     application: Application,
     qbit: QbitClient,
     url: str,
-) -> dict[str, bool | AddContext]:
-    existing_hashes = {item.hash for item in await qbit.list_torrents(filter_name="all")}
+    known_hashes: set[str],
+) -> AddTorrentResult:
     settings: Settings = application.bot_data["settings"]
+    is_magnet = url.lower().startswith("magnet:?")
     upload_limit = (
-        _magnet_upload_limit_bytes(settings) if url.lower().startswith("magnet:?") else None
+        _magnet_upload_limit_bytes(settings) if is_magnet else None
     )
     await qbit.add_torrent_url_with_options(url, upload_limit=upload_limit)
-    return {
-        "is_magnet": url.lower().startswith("magnet:?"),
-        "context": AddContext(
-            known_hashes=existing_hashes,
+    return AddTorrentResult(
+        is_magnet=is_magnet,
+        torrent_hash=_extract_magnet_hash(url),
+        context=AddContext(
+            known_hashes=set(known_hashes),
             started_at=int(time.time()),
             name_hint=_extract_name_hint(url),
-            is_magnet=url.lower().startswith("magnet:?"),
+            is_magnet=is_magnet,
         ),
-    }
+    )
 
 
 def _format_add_failure(index: int, error: Exception) -> str:
@@ -136,20 +175,24 @@ async def _add_torrent_links(
     magnet_count = 0
     contexts: list[AddContext] = []
     failures: list[str] = []
+    known_hashes = await _get_cached_known_hashes(application, qbit)
 
     for index, link in enumerate(links, start=1):
         try:
-            result = await _add_torrent_url(application, qbit, link)
+            result = await _add_torrent_url(application, qbit, link, known_hashes)
         except Exception as exc:
             failure = _format_add_failure(index, exc)
             logging.warning("Failed to add torrent link: %s", failure)
             failures.append(failure)
             continue
 
-        if result["is_magnet"]:
+        if result.is_magnet:
             magnet_count += 1
-        contexts.append(result["context"])
+        if result.torrent_hash:
+            known_hashes.add(result.torrent_hash)
+        contexts.append(result.context)
 
+    _set_cached_known_hashes(application, known_hashes)
     return AddBatchResult(
         total_links=len(links),
         success_count=len(contexts),
@@ -198,3 +241,23 @@ def _format_add_batch_reply(
         if len(result.failures) > 5:
             notes.append(f"• 还有 {len(result.failures) - 5} 个失败项未显示")
     return "\n".join(notes)
+
+
+async def _get_cached_known_hashes(
+    application: Application,
+    qbit: QbitClient,
+) -> set[str]:
+    now = time.time()
+    cache = application.bot_data.get("known_hashes_cache")
+    if cache:
+        cached_at, cached_hashes = cache
+        if now - cached_at <= _KNOWN_HASH_CACHE_TTL_SECONDS:
+            return set(cached_hashes)
+
+    known_hashes = {item.hash for item in await qbit.list_torrents(filter_name="all")}
+    _set_cached_known_hashes(application, known_hashes)
+    return known_hashes
+
+
+def _set_cached_known_hashes(application: Application, known_hashes: set[str]) -> None:
+    application.bot_data["known_hashes_cache"] = (time.time(), set(known_hashes))

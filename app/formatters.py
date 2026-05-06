@@ -10,46 +10,25 @@ from app.jellyfin_client import JellyfinItem
 from app.qbit_client import TorrentFile, TorrentProperties, TorrentSummary
 
 
-_STATE_LABELS = {
-    "downloading": "⬇️ 下载中",
-    "forcedDL": "🚀 强制下载",
-    "forcedMetaDL": "🧲 强制获取元数据",
-    "metaDL": "🧲 获取元数据",
-    "uploading": "⬆️ 做种中",
-    "forcedUP": "🚀 强制做种",
-    "stalledDL": "⏸️ 等待下载",
-    "stalledUP": "⏸️ 等待上传",
-    "queuedDL": "🕒 排队下载",
-    "queuedUP": "🕒 排队做种",
-    "pausedDL": "⏸️ 已暂停",
-    "pausedUP": "⏸️ 已暂停",
-    "checkingDL": "🔎 校验中",
-    "checkingUP": "🔎 校验中",
-    "checkingResumeData": "🔄 恢复数据校验",
-    "moving": "📦 移动文件中",
-    "missingFiles": "📁 文件缺失",
-    "error": "❌ 错误",
-}
-
-_STATE_ICONS = {
-    "downloading": "⬇️",
-    "forcedDL": "🚀",
-    "forcedMetaDL": "🧲",
-    "metaDL": "🧲",
-    "uploading": "⬆️",
-    "forcedUP": "🚀",
-    "stalledDL": "🟡",
-    "stalledUP": "🟡",
-    "queuedDL": "🕒",
-    "queuedUP": "🕒",
-    "pausedDL": "⏸️",
-    "pausedUP": "⏸️",
-    "checkingDL": "🔎",
-    "checkingUP": "🔎",
-    "checkingResumeData": "🔄",
-    "moving": "📦",
-    "missingFiles": "📁",
-    "error": "❌",
+_STATE_INFO = {
+    "downloading": ("⬇️", "⬇️ 下载中"),
+    "forcedDL": ("🚀", "🚀 强制下载"),
+    "forcedMetaDL": ("🧲", "🧲 强制获取元数据"),
+    "metaDL": ("🧲", "🧲 获取元数据"),
+    "uploading": ("⬆️", "⬆️ 做种中"),
+    "forcedUP": ("🚀", "🚀 强制做种"),
+    "stalledDL": ("🟡", "⏸️ 等待下载"),
+    "stalledUP": ("🟡", "⏸️ 等待上传"),
+    "queuedDL": ("🕒", "🕒 排队下载"),
+    "queuedUP": ("🕒", "🕒 排队做种"),
+    "pausedDL": ("⏸️", "⏸️ 已暂停"),
+    "pausedUP": ("⏸️", "⏸️ 已暂停"),
+    "checkingDL": ("🔎", "🔎 校验中"),
+    "checkingUP": ("🔎", "🔎 校验中"),
+    "checkingResumeData": ("🔄", "🔄 恢复数据校验"),
+    "moving": ("📦", "📦 移动文件中"),
+    "missingFiles": ("📁", "📁 文件缺失"),
+    "error": ("❌", "❌ 错误"),
 }
 
 
@@ -91,11 +70,11 @@ def _short_hash(hash_value: str) -> str:
 
 
 def _fmt_state(value: str) -> str:
-    return _STATE_LABELS.get(value, value)
+    return _STATE_INFO.get(value, ("🎯", value))[1]
 
 
 def _state_icon(state: str) -> str:
-    return _STATE_ICONS.get(state, "🎯")
+    return _STATE_INFO.get(state, ("🎯", state))[0]
 
 
 def _fmt_progress_bar(progress: float, width: int = 10) -> str:
@@ -195,10 +174,6 @@ def _build_detail_keyboard(
         ],
     ]
     return InlineKeyboardMarkup(rows)
-
-
-def filter_name_to_view(view: str) -> str:
-    return "active" if view == "active" else "all"
 
 
 def _format_torrent_detail(

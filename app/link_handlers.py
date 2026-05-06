@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import io
+import logging
 from html import escape
 
 from telegram import InputFile, Update
@@ -22,6 +24,9 @@ from app.qbit_client import QbitClient
 from app.runtime_state import _get_jav_pattern
 
 
+_MAX_BACKGROUND_FINALIZE_CONCURRENCY = 3
+
+
 def _pick_best_jellyfin_match(code: str, items: list[JellyfinItem]) -> JellyfinItem:
     code_lower = code.lower()
     scored = []
@@ -40,21 +45,67 @@ def _pick_best_jellyfin_match(code: str, items: list[JellyfinItem]) -> JellyfinI
     return scored[0][1]
 
 
+def _get_finalize_semaphore(application: Application) -> asyncio.Semaphore:
+    semaphore = application.bot_data.get("add_finalize_semaphore")
+    if semaphore is None:
+        semaphore = asyncio.Semaphore(_MAX_BACKGROUND_FINALIZE_CONCURRENCY)
+        application.bot_data["add_finalize_semaphore"] = semaphore
+    return semaphore
+
+
+async def _finalize_added_torrents_batch(
+    application: Application,
+    qbit: QbitClient,
+    contexts: list[AddContext],
+    chat_id: int,
+) -> None:
+    semaphore = _get_finalize_semaphore(application)
+    queue: asyncio.Queue[AddContext] = asyncio.Queue()
+    for add_context in contexts:
+        queue.put_nowait(add_context)
+
+    async def worker() -> None:
+        while True:
+            try:
+                add_context = queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return
+            try:
+                async with semaphore:
+                    await _background_finalize_torrent(
+                        application,
+                        qbit,
+                        add_context,
+                        chat_id,
+                    )
+            except Exception:
+                logging.exception("Failed while finalizing added torrent in batch")
+            finally:
+                queue.task_done()
+
+    worker_count = min(_MAX_BACKGROUND_FINALIZE_CONCURRENCY, len(contexts))
+    await asyncio.gather(*(worker() for _ in range(worker_count)))
+
+
 def _start_add_background_tasks(
     application: Application,
     qbit: QbitClient,
     contexts: list[AddContext],
     chat_id: int,
 ) -> None:
-    for add_context in contexts:
-        application.create_task(
-            _background_finalize_torrent(
-                application,
-                qbit,
-                add_context,
-                chat_id,
-            )
+    if not contexts:
+        return
+    task = application.create_task(
+        _finalize_added_torrents_batch(
+            application,
+            qbit,
+            contexts,
+            chat_id,
         )
+    )
+    tasks: set[asyncio.Task] = application.bot_data.setdefault("add_finalize_tasks", set())
+    tasks.add(task)
+    task.add_done_callback(tasks.discard)
 
 
 async def add_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

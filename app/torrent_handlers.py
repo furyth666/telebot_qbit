@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from html import escape
+from typing import Awaitable, Callable
 
 from telegram import InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
@@ -25,7 +26,7 @@ from app.handler_utils import (
     _resolve_hash_or_reply,
 )
 from app.jav_rules import _is_jav_title
-from app.jobs import _apply_jav_file_selection
+from app.jobs import JavFileSelectionResult, _apply_jav_file_selection
 from app.qbit_client import QbitClient
 from app.runtime_state import _get_jav_pattern, _get_state, _persist_state
 
@@ -144,11 +145,12 @@ async def retry_jav_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     qbit: QbitClient = context.application.bot_data["qbit"]
     settings = context.application.bot_data["settings"]
     pattern = _get_jav_pattern(context.application)
-    full_hash = await qbit.resolve_hash(torrent_hash)
-    torrent = await qbit.get_torrent(full_hash)
-    if not torrent:
-        await update.message.reply_text("没有找到对应任务。")
+    try:
+        torrent = await qbit.resolve_torrent(torrent_hash)
+    except ValueError as exc:
+        await update.message.reply_text(str(exc))
         return
+    full_hash = torrent.hash
     if not _is_jav_title(torrent.name, pattern):
         await update.message.reply_text(
             "<b>未命中当前 JAV 规则</b>\n"
@@ -162,116 +164,110 @@ async def retry_jav_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     except Exception:
         pass
     await qbit.set_category(full_hash, settings.jav_category_name)
-    filtered = await _apply_jav_file_selection(context.application, qbit, full_hash)
+    selection_result = await _apply_jav_file_selection(context.application, qbit, full_hash)
     state = _get_state(context.application)
     state.jav_processed_hashes.add(full_hash)
-    _persist_state(context.application)
+    await _persist_state(context.application)
 
     notes = [f"<b>已重新处理到 {escape(settings.jav_category_name)}</b>"]
-    if filtered:
+    if selection_result is JavFileSelectionResult.FILTERED:
         notes.append(f"📁 已仅保留大于 {_fmt_large_file_threshold(settings)} 的文件下载，小文件已跳过。")
+    elif selection_result is JavFileSelectionResult.NOT_READY:
+        notes.append("⚠️ 文件元数据暂未就绪，尚未完成大小筛选；请稍后再次发送 `/retryjav <hash>`。")
     await update.message.reply_text("\n".join(notes), parse_mode=ParseMode.HTML)
 
 
-async def pause_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def _torrent_action_handler(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    usage: str,
+    action: Callable[[QbitClient, str], Awaitable[None]],
+    success_label: str,
+) -> None:
     if not await _require_allowed_user(update, context):
         return
     torrent_hash = _get_hash_argument(context)
     if not torrent_hash:
-        await update.message.reply_text("用法: /pause <hash>")
+        await update.message.reply_text(usage)
         return
     qbit: QbitClient = context.application.bot_data["qbit"]
     full_hash = await _resolve_hash_or_reply(update, context)
     if not full_hash:
         return
     try:
-        await qbit.pause_torrent(full_hash)
+        await action(qbit, full_hash)
     except Exception as exc:
         await _reply_qbit_action_error(update, exc)
         return
     await update.message.reply_text(
-        _format_action_result("已暂停任务", full_hash),
+        _format_action_result(success_label, full_hash),
         parse_mode=ParseMode.HTML,
+    )
+
+
+async def pause_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _torrent_action_handler(
+        update,
+        context,
+        usage="用法: /pause <hash>",
+        action=lambda qbit, torrent_hash: qbit.pause_torrent(torrent_hash),
+        success_label="已暂停任务",
     )
 
 
 async def resume_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await _require_allowed_user(update, context):
-        return
-    torrent_hash = _get_hash_argument(context)
-    if not torrent_hash:
-        await update.message.reply_text("用法: /resume <hash>")
-        return
-    qbit: QbitClient = context.application.bot_data["qbit"]
-    full_hash = await _resolve_hash_or_reply(update, context)
-    if not full_hash:
-        return
-    try:
-        await qbit.resume_torrent(full_hash)
-    except Exception as exc:
-        await _reply_qbit_action_error(update, exc)
-        return
-    await update.message.reply_text(
-        _format_action_result("已恢复任务", full_hash),
-        parse_mode=ParseMode.HTML,
+    await _torrent_action_handler(
+        update,
+        context,
+        usage="用法: /resume <hash>",
+        action=lambda qbit, torrent_hash: qbit.resume_torrent(torrent_hash),
+        success_label="已恢复任务",
     )
 
 
 async def delete_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await _require_allowed_user(update, context):
-        return
-    torrent_hash = _get_hash_argument(context)
-    if not torrent_hash:
-        await update.message.reply_text("用法: /delete <hash>")
-        return
-    qbit: QbitClient = context.application.bot_data["qbit"]
-    full_hash = await _resolve_hash_or_reply(update, context)
-    if not full_hash:
-        return
-    try:
-        await qbit.delete_torrent(full_hash, delete_files=False)
-    except Exception as exc:
-        await _reply_qbit_action_error(update, exc)
-        return
-    await update.message.reply_text(
-        _format_action_result("已删除任务，保留文件", full_hash),
-        parse_mode=ParseMode.HTML,
+    await _torrent_action_handler(
+        update,
+        context,
+        usage="用法: /delete <hash>",
+        action=lambda qbit, torrent_hash: qbit.delete_torrent(
+            torrent_hash,
+            delete_files=False,
+        ),
+        success_label="已删除任务，保留文件",
     )
 
 
 async def delete_files_handler(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    if not await _require_allowed_user(update, context):
-        return
-    torrent_hash = _get_hash_argument(context)
-    if not torrent_hash:
-        await update.message.reply_text("用法: /deletefiles <hash>")
-        return
-    qbit: QbitClient = context.application.bot_data["qbit"]
-    full_hash = await _resolve_hash_or_reply(update, context)
-    if not full_hash:
-        return
-    try:
-        await qbit.delete_torrent(full_hash, delete_files=True)
-    except Exception as exc:
-        await _reply_qbit_action_error(update, exc)
-        return
-    await update.message.reply_text(
-        _format_action_result("已删除任务和文件", full_hash),
-        parse_mode=ParseMode.HTML,
+    await _torrent_action_handler(
+        update,
+        context,
+        usage="用法: /deletefiles <hash>",
+        action=lambda qbit, torrent_hash: qbit.delete_torrent(
+            torrent_hash,
+            delete_files=True,
+        ),
+        success_label="已删除任务和文件",
     )
 
 
 async def torrent_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await _require_allowed_user(update, context):
-        return
     query = update.callback_query
+    if not await _require_allowed_user(update, context):
+        if query:
+            await query.answer("无权限使用这个 bot。", show_alert=True)
+        return
     if not query or not query.data:
+        if query:
+            await query.answer()
         return
     try:
         _, action, view, payload = query.data.split(":", 3)
     except ValueError:
+        await query.answer("这个按钮已经过期或不可用。", show_alert=True)
         return
 
     qbit: QbitClient = context.application.bot_data["qbit"]
@@ -314,5 +310,6 @@ async def torrent_callback_handler(update: Update, context: ContextTypes.DEFAULT
             )
             await query.answer("已删除任务和文件")
             return
+        await query.answer("这个按钮已经过期或不可用。", show_alert=True)
     except Exception as exc:
         await _callback_action_error(query, exc)

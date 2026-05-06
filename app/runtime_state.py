@@ -19,5 +19,5 @@ def _get_state(application: Application) -> BotState:
     return application.bot_data["bot_state"]
 
 
-def _persist_state(application: Application) -> None:
-    _get_state_store(application).save(_get_state(application))
+async def _persist_state(application: Application) -> None:
+    await _get_state_store(application).save_async(_get_state(application))

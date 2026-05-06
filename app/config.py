@@ -1,4 +1,5 @@
 import os
+import re
 from dataclasses import dataclass
 
 
@@ -8,7 +9,10 @@ def _split_user_ids(raw: str) -> list[int]:
         item = part.strip()
         if not item:
             continue
-        user_ids.append(int(item))
+        try:
+            user_ids.append(int(item))
+        except ValueError as exc:
+            raise ValueError(f"TELEGRAM_ALLOWED_USER_IDS 包含无效用户 ID: {item}") from exc
     return user_ids
 
 
@@ -16,6 +20,13 @@ def _as_bool(raw: str | None, default: bool = False) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _required_env(name: str) -> str:
+    value = os.getenv(name)
+    if value is None:
+        raise ValueError(f"缺少必要环境变量: {name}")
+    return value
 
 
 @dataclass(frozen=True)
@@ -31,7 +42,7 @@ class Settings:
     jav_name_regex: str = r"[A-Za-z]{2,}-\d{2,}"
     jav_large_file_threshold_gb: float = 1.0
     magnet_upload_limit_kib: int = 30
-    state_file_path: str = "data/bot_state.json"
+    state_file_path: str = "data/bot_state.sqlite3"
     jellyfin_base_url: str = ""
     jellyfin_public_base_url: str = ""
     jellyfin_api_key: str = ""
@@ -46,17 +57,58 @@ class Settings:
     webhook_path: str = ""
     webhook_secret_token: str = ""
 
+    def validate(self) -> "Settings":
+        errors: list[str] = []
+
+        if not self.telegram_bot_token.strip():
+            errors.append("TELEGRAM_BOT_TOKEN 不能为空")
+        if not self.telegram_allowed_user_ids:
+            errors.append("TELEGRAM_ALLOWED_USER_IDS 至少需要配置一个用户 ID")
+        if not self.qbit_base_url:
+            errors.append("QBIT_BASE_URL 不能为空")
+        if not self.qbit_username:
+            errors.append("QBIT_USERNAME 不能为空")
+        if not self.qbit_password:
+            errors.append("QBIT_PASSWORD 不能为空")
+        if self.telegram_mode not in {"polling", "webhook"}:
+            errors.append("TELEGRAM_MODE 只能是 polling 或 webhook")
+        try:
+            re.compile(self.jav_name_regex)
+        except re.error as exc:
+            errors.append(f"JAV_NAME_REGEX 不是有效正则: {exc}")
+        if self.jav_large_file_threshold_gb <= 0:
+            errors.append("JAV_LARGE_FILE_THRESHOLD_GB 必须大于 0")
+        if self.magnet_upload_limit_kib < 0:
+            errors.append("MAGNET_UPLOAD_LIMIT_KIB 不能小于 0")
+        if self.jellyfin_duplicate_grace_hours <= 0:
+            errors.append("JELLYFIN_DUPLICATE_GRACE_HOURS 必须大于 0")
+        if self.watchdog_interval_seconds <= 0:
+            errors.append("WATCHDOG_INTERVAL_SECONDS 必须大于 0")
+        if self.watchdog_max_failures <= 0:
+            errors.append("WATCHDOG_MAX_FAILURES 必须大于 0")
+        if self.telegram_mode == "webhook":
+            if not self.webhook_base_url:
+                errors.append("Webhook 模式需要配置 WEBHOOK_BASE_URL")
+            if not self.webhook_path:
+                errors.append("Webhook 模式需要配置 WEBHOOK_PATH")
+            if self.webhook_listen_port <= 0 or self.webhook_listen_port > 65535:
+                errors.append("WEBHOOK_LISTEN_PORT 必须在 1-65535 之间")
+
+        if errors:
+            raise ValueError("配置验证失败:\n- " + "\n- ".join(errors))
+        return self
+
     @classmethod
     def from_env(cls) -> "Settings":
         return cls(
             telegram_mode=os.getenv("TELEGRAM_MODE", "polling").strip().lower(),
-            telegram_bot_token=os.environ["TELEGRAM_BOT_TOKEN"],
+            telegram_bot_token=_required_env("TELEGRAM_BOT_TOKEN"),
             telegram_allowed_user_ids=_split_user_ids(
-                os.environ["TELEGRAM_ALLOWED_USER_IDS"]
+                _required_env("TELEGRAM_ALLOWED_USER_IDS")
             ),
-            qbit_base_url=os.environ["QBIT_BASE_URL"].rstrip("/"),
-            qbit_username=os.environ["QBIT_USERNAME"],
-            qbit_password=os.environ["QBIT_PASSWORD"],
+            qbit_base_url=_required_env("QBIT_BASE_URL").rstrip("/"),
+            qbit_username=_required_env("QBIT_USERNAME"),
+            qbit_password=_required_env("QBIT_PASSWORD"),
             bot_log_level=os.getenv("BOT_LOG_LEVEL", "INFO"),
             jav_category_name=os.getenv("JAV_CATEGORY_NAME", "JAV"),
             jav_name_regex=os.getenv("JAV_NAME_REGEX", r"[A-Za-z]{2,}-\d{2,}"),
@@ -64,7 +116,7 @@ class Settings:
                 os.getenv("JAV_LARGE_FILE_THRESHOLD_GB", "1")
             ),
             magnet_upload_limit_kib=int(os.getenv("MAGNET_UPLOAD_LIMIT_KIB", "30")),
-            state_file_path=os.getenv("STATE_FILE_PATH", "data/bot_state.json"),
+            state_file_path=os.getenv("STATE_FILE_PATH", "data/bot_state.sqlite3"),
             jellyfin_base_url=os.getenv("JELLYFIN_BASE_URL", "").rstrip("/"),
             jellyfin_public_base_url=os.getenv("JELLYFIN_PUBLIC_BASE_URL", "").rstrip("/"),
             jellyfin_api_key=os.getenv("JELLYFIN_API_KEY", ""),
@@ -83,4 +135,4 @@ class Settings:
             webhook_listen_port=int(os.getenv("WEBHOOK_LISTEN_PORT", "8099")),
             webhook_path=os.getenv("WEBHOOK_PATH", "").strip("/"),
             webhook_secret_token=os.getenv("WEBHOOK_SECRET_TOKEN", ""),
-        )
+        ).validate()

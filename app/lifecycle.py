@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import re
 
 from telegram import BotCommand
@@ -39,8 +38,9 @@ async def _watchdog_loop(application: Application) -> None:
                 settings.watchdog_max_failures,
             )
             if failures >= settings.watchdog_max_failures:
-                logging.critical("Watchdog failure limit reached; exiting for Docker restart")
-                os._exit(1)
+                logging.critical("Watchdog failure limit reached; requesting graceful shutdown")
+                application.stop_running()
+                return
 
 
 async def post_init(application: Application) -> None:
@@ -69,11 +69,19 @@ async def post_init(application: Application) -> None:
     application.bot_data["bot_state"] = state
 
     qbit: QbitClient = application.bot_data["qbit"]
-    existing = await qbit.list_torrents(filter_name="all")
-    state.notified_completed_hashes.update(
-        item.hash for item in existing if item.progress >= 1 or item.completion_on > 0
-    )
-    _persist_state(application)
+    try:
+        existing = await qbit.list_torrents(filter_name="completed")
+    except Exception:
+        logging.exception(
+            "Failed to initialize qBittorrent completion baseline; will retry in background"
+        )
+        application.bot_data["completion_monitor_initialized"] = False
+    else:
+        state.notified_completed_hashes.update(
+            item.hash for item in existing
+        )
+        application.bot_data["completion_monitor_initialized"] = True
+        await _persist_state(application)
     application.bot_data["completion_monitor_task"] = asyncio.create_task(
         _notify_completion_loop(application)
     )
@@ -84,9 +92,11 @@ async def post_init(application: Application) -> None:
 
 
 async def post_shutdown(application: Application) -> None:
+    add_finalize_tasks = list(application.bot_data.get("add_finalize_tasks", set()))
     tasks = [
         application.bot_data.get("completion_monitor_task"),
         application.bot_data.get("watchdog_task"),
+        *add_finalize_tasks,
     ]
     for task in [item for item in tasks if item]:
         task.cancel()
@@ -94,8 +104,9 @@ async def post_shutdown(application: Application) -> None:
             await task
         except asyncio.CancelledError:
             pass
+    application.bot_data.get("add_finalize_tasks", set()).clear()
 
-    _persist_state(application)
+    await _persist_state(application)
 
     qbit: QbitClient = application.bot_data["qbit"]
     await qbit.close()

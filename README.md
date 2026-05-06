@@ -72,7 +72,7 @@ services:
 - `JAV_NAME_REGEX`: JAV 标题匹配规则
 - `JAV_LARGE_FILE_THRESHOLD_GB`: JAV 文件筛选阈值，默认 `1`
 - `MAGNET_UPLOAD_LIMIT_KIB`: magnet 上传限速，默认 `30`
-- `STATE_FILE_PATH`: bot 持久化状态文件，默认 `data/bot_state.json`
+- `STATE_FILE_PATH`: bot 持久化 SQLite 状态库，默认 `data/bot_state.sqlite3`。旧的 `bot_state.json` 会在首次启动时自动迁移。
 - `JELLYFIN_BASE_URL`: Jellyfin API 地址，用于检查是否已有同番号短片
 - `JELLYFIN_PUBLIC_BASE_URL`: 返回给 Telegram 的 Jellyfin 内网访问地址
 - `JELLYFIN_API_KEY`: Jellyfin API Key
