@@ -81,6 +81,13 @@ services:
 - `WATCHDOG_ENABLED`: 是否启用 bot 自检，默认 `true`
 - `WATCHDOG_INTERVAL_SECONDS`: 自检间隔，默认 `300`
 - `WATCHDOG_MAX_FAILURES`: 连续失败多少次后退出并交给 Docker 重启，默认 `3`
+- `TELEGRAM_CONNECT_TIMEOUT_SECONDS`: Telegram 出站连接超时，默认 `5`
+- `TELEGRAM_READ_TIMEOUT_SECONDS`: Telegram 出站读取超时，默认 `8`
+- `TELEGRAM_WRITE_TIMEOUT_SECONDS`: Telegram 出站写入超时，默认 `8`
+- `TELEGRAM_POOL_TIMEOUT_SECONDS`: Telegram 连接池等待超时，默认 `2`
+- `TELEGRAM_CONNECTION_POOL_SIZE`: Telegram HTTP 连接池大小，默认 `8`
+- `TELEGRAM_NETWORK_ERROR_RESTART_THRESHOLD`: 短时间 Telegram 网络错误达到多少次后请求 Docker 重启，默认 `3`
+- `TELEGRAM_NETWORK_ERROR_WINDOW_SECONDS`: Telegram 网络错误统计窗口，默认 `180`
 - `WEBHOOK_BASE_URL`: webhook 公网 HTTPS 地址，例如 `https://qbit-bot.example.com`
 - `WEBHOOK_LISTEN_HOST`: webhook 本地监听地址，默认 `0.0.0.0`
 - `WEBHOOK_LISTEN_PORT`: webhook 本地监听端口，默认 `8099`

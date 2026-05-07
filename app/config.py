@@ -51,6 +51,13 @@ class Settings:
     watchdog_enabled: bool = True
     watchdog_interval_seconds: int = 300
     watchdog_max_failures: int = 3
+    telegram_connect_timeout_seconds: float = 5.0
+    telegram_read_timeout_seconds: float = 8.0
+    telegram_write_timeout_seconds: float = 8.0
+    telegram_pool_timeout_seconds: float = 2.0
+    telegram_connection_pool_size: int = 8
+    telegram_network_error_restart_threshold: int = 3
+    telegram_network_error_window_seconds: int = 180
     webhook_base_url: str = ""
     webhook_listen_host: str = "0.0.0.0"
     webhook_listen_port: int = 8099
@@ -86,6 +93,20 @@ class Settings:
             errors.append("WATCHDOG_INTERVAL_SECONDS 必须大于 0")
         if self.watchdog_max_failures <= 0:
             errors.append("WATCHDOG_MAX_FAILURES 必须大于 0")
+        if self.telegram_connect_timeout_seconds <= 0:
+            errors.append("TELEGRAM_CONNECT_TIMEOUT_SECONDS 必须大于 0")
+        if self.telegram_read_timeout_seconds <= 0:
+            errors.append("TELEGRAM_READ_TIMEOUT_SECONDS 必须大于 0")
+        if self.telegram_write_timeout_seconds <= 0:
+            errors.append("TELEGRAM_WRITE_TIMEOUT_SECONDS 必须大于 0")
+        if self.telegram_pool_timeout_seconds <= 0:
+            errors.append("TELEGRAM_POOL_TIMEOUT_SECONDS 必须大于 0")
+        if self.telegram_connection_pool_size <= 0:
+            errors.append("TELEGRAM_CONNECTION_POOL_SIZE 必须大于 0")
+        if self.telegram_network_error_restart_threshold <= 0:
+            errors.append("TELEGRAM_NETWORK_ERROR_RESTART_THRESHOLD 必须大于 0")
+        if self.telegram_network_error_window_seconds <= 0:
+            errors.append("TELEGRAM_NETWORK_ERROR_WINDOW_SECONDS 必须大于 0")
         if self.telegram_mode == "webhook":
             if not self.webhook_base_url:
                 errors.append("Webhook 模式需要配置 WEBHOOK_BASE_URL")
@@ -130,6 +151,27 @@ class Settings:
             watchdog_enabled=_as_bool(os.getenv("WATCHDOG_ENABLED"), True),
             watchdog_interval_seconds=int(os.getenv("WATCHDOG_INTERVAL_SECONDS", "300")),
             watchdog_max_failures=int(os.getenv("WATCHDOG_MAX_FAILURES", "3")),
+            telegram_connect_timeout_seconds=float(
+                os.getenv("TELEGRAM_CONNECT_TIMEOUT_SECONDS", "5")
+            ),
+            telegram_read_timeout_seconds=float(
+                os.getenv("TELEGRAM_READ_TIMEOUT_SECONDS", "8")
+            ),
+            telegram_write_timeout_seconds=float(
+                os.getenv("TELEGRAM_WRITE_TIMEOUT_SECONDS", "8")
+            ),
+            telegram_pool_timeout_seconds=float(
+                os.getenv("TELEGRAM_POOL_TIMEOUT_SECONDS", "2")
+            ),
+            telegram_connection_pool_size=int(
+                os.getenv("TELEGRAM_CONNECTION_POOL_SIZE", "8")
+            ),
+            telegram_network_error_restart_threshold=int(
+                os.getenv("TELEGRAM_NETWORK_ERROR_RESTART_THRESHOLD", "3")
+            ),
+            telegram_network_error_window_seconds=int(
+                os.getenv("TELEGRAM_NETWORK_ERROR_WINDOW_SECONDS", "180")
+            ),
             webhook_base_url=os.getenv("WEBHOOK_BASE_URL", "").rstrip("/"),
             webhook_listen_host=os.getenv("WEBHOOK_LISTEN_HOST", "0.0.0.0"),
             webhook_listen_port=int(os.getenv("WEBHOOK_LISTEN_PORT", "8099")),

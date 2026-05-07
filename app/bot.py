@@ -7,6 +7,7 @@ from telegram.ext import (
     MessageHandler,
     filters,
 )
+from telegram.request import HTTPXRequest
 
 from app.config import Settings
 from app.handlers import (
@@ -52,9 +53,17 @@ def _register_handlers(application: Application) -> None:
 
 
 def create_application(settings: Settings) -> Application:
+    telegram_request = HTTPXRequest(
+        connection_pool_size=settings.telegram_connection_pool_size,
+        connect_timeout=settings.telegram_connect_timeout_seconds,
+        read_timeout=settings.telegram_read_timeout_seconds,
+        write_timeout=settings.telegram_write_timeout_seconds,
+        pool_timeout=settings.telegram_pool_timeout_seconds,
+    )
     application = (
         Application.builder()
         .token(settings.telegram_bot_token)
+        .request(telegram_request)
         .post_init(post_init)
         .post_shutdown(post_shutdown)
         .build()

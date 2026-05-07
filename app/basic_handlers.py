@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import logging
+import time
 
 from telegram import Update
 from telegram.constants import ParseMode
+from telegram.error import NetworkError
 from telegram.ext import ContextTypes
 
 from app.handler_utils import _require_allowed_user
@@ -39,3 +41,23 @@ async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 async def error_handler(_: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logging.exception("Unhandled bot error", exc_info=context.error)
+    if not isinstance(context.error, NetworkError):
+        return
+
+    settings = context.application.bot_data["settings"]
+    now = time.monotonic()
+    window_start = now - settings.telegram_network_error_window_seconds
+    failures = [
+        item
+        for item in context.application.bot_data.get("telegram_network_error_times", [])
+        if item >= window_start
+    ]
+    failures.append(now)
+    context.application.bot_data["telegram_network_error_times"] = failures
+    if len(failures) >= settings.telegram_network_error_restart_threshold:
+        logging.critical(
+            "Telegram network error threshold reached (%s/%s seconds); requesting restart",
+            len(failures),
+            settings.telegram_network_error_window_seconds,
+        )
+        context.application.stop_running()
