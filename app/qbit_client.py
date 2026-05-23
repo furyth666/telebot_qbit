@@ -37,10 +37,18 @@ class TorrentProperties:
 
 
 class QbitClient:
-    def __init__(self, base_url: str, username: str, password: str) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        username: str,
+        password: str,
+        api_token: str = "",
+    ) -> None:
         self.base_url = base_url
         self.username = username
         self.password = password
+        self.api_token = api_token
+        self._api_token_failed = False
         self._client = httpx.AsyncClient(
             base_url=base_url,
             timeout=20.0,
@@ -55,13 +63,26 @@ class QbitClient:
         if self._logged_in:
             return
 
+        if self.api_token and not self._api_token_failed:
+            self._client.headers["Authorization"] = f"Bearer {self.api_token}"
+            self._logged_in = True
+            return
+
+        self._client.headers.pop("Authorization", None)
         response = await self._client.post(
             "/api/v2/auth/login",
             data={"username": self.username, "password": self.password},
         )
         response.raise_for_status()
 
-        if response.text.strip() != "Ok.":
+        login_accepted = (
+            response.text.strip() == "Ok."
+            or (
+                response.status_code == 204
+                and bool(response.headers.get("set-cookie"))
+            )
+        )
+        if not login_accepted:
             raise RuntimeError("qBittorrent 登录失败，请检查账号密码或 WebUI 配置。")
 
         self._logged_in = True
@@ -77,6 +98,8 @@ class QbitClient:
         await self._ensure_login()
         response = await self._client.request(method, path, params=params, data=data)
         if response.status_code in {401, 403}:
+            if self.api_token and not self._api_token_failed:
+                self._api_token_failed = True
             self._logged_in = False
             await self._ensure_login()
             response = await self._client.request(method, path, params=params, data=data)

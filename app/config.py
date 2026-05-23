@@ -36,6 +36,7 @@ class Settings:
     qbit_base_url: str
     qbit_username: str
     qbit_password: str
+    qbit_api_token: str = ""
     telegram_mode: str = "polling"
     bot_log_level: str = "INFO"
     jav_category_name: str = "JAV"
@@ -73,10 +74,11 @@ class Settings:
             errors.append("TELEGRAM_ALLOWED_USER_IDS 至少需要配置一个用户 ID")
         if not self.qbit_base_url:
             errors.append("QBIT_BASE_URL 不能为空")
-        if not self.qbit_username:
-            errors.append("QBIT_USERNAME 不能为空")
-        if not self.qbit_password:
-            errors.append("QBIT_PASSWORD 不能为空")
+        if not self.qbit_api_token:
+            if not self.qbit_username:
+                errors.append("QBIT_USERNAME 不能为空")
+            if not self.qbit_password:
+                errors.append("QBIT_PASSWORD 不能为空")
         if self.telegram_mode not in {"polling", "webhook"}:
             errors.append("TELEGRAM_MODE 只能是 polling 或 webhook")
         try:
@@ -128,8 +130,9 @@ class Settings:
                 _required_env("TELEGRAM_ALLOWED_USER_IDS")
             ),
             qbit_base_url=_required_env("QBIT_BASE_URL").rstrip("/"),
-            qbit_username=_required_env("QBIT_USERNAME"),
-            qbit_password=_required_env("QBIT_PASSWORD"),
+            qbit_username=os.getenv("QBIT_USERNAME", ""),
+            qbit_password=os.getenv("QBIT_PASSWORD", ""),
+            qbit_api_token=os.getenv("QBIT_API_TOKEN", ""),
             bot_log_level=os.getenv("BOT_LOG_LEVEL", "INFO"),
             jav_category_name=os.getenv("JAV_CATEGORY_NAME", "JAV"),
             jav_name_regex=os.getenv("JAV_NAME_REGEX", r"[A-Za-z]{2,}-\d{2,}"),

@@ -73,6 +73,7 @@ def create_application(settings: Settings) -> Application:
         settings.qbit_base_url,
         settings.qbit_username,
         settings.qbit_password,
+        settings.qbit_api_token,
     )
     application.bot_data["jellyfin"] = JellyfinClient(
         settings.jellyfin_base_url,

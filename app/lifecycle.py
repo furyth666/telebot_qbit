@@ -47,6 +47,12 @@ async def _watchdog_loop(application: Application) -> None:
 
 async def post_init(application: Application) -> None:
     settings: Settings = application.bot_data["settings"]
+    application.bot_data["jav_name_pattern"] = re.compile(settings.jav_name_regex)
+    state_store = StateStore(settings.state_file_path)
+    state = state_store.load()
+    application.bot_data["state_store"] = state_store
+    application.bot_data["bot_state"] = state
+
     try:
         await application.bot.set_my_commands(
             [
@@ -69,11 +75,6 @@ async def post_init(application: Application) -> None:
         logging.exception("Failed to set Telegram commands; continuing startup")
     except TelegramError:
         logging.exception("Telegram rejected command setup; continuing startup")
-    application.bot_data["jav_name_pattern"] = re.compile(settings.jav_name_regex)
-    state_store = StateStore(settings.state_file_path)
-    state = state_store.load()
-    application.bot_data["state_store"] = state_store
-    application.bot_data["bot_state"] = state
 
     qbit: QbitClient = application.bot_data["qbit"]
     try:
@@ -113,9 +114,12 @@ async def post_shutdown(application: Application) -> None:
             pass
     application.bot_data.get("add_finalize_tasks", set()).clear()
 
-    await _persist_state(application)
+    if "state_store" in application.bot_data and "bot_state" in application.bot_data:
+        await _persist_state(application)
 
-    qbit: QbitClient = application.bot_data["qbit"]
-    await qbit.close()
-    jellyfin: JellyfinClient = application.bot_data["jellyfin"]
-    await jellyfin.close()
+    qbit: QbitClient | None = application.bot_data.get("qbit")
+    if qbit:
+        await qbit.close()
+    jellyfin: JellyfinClient | None = application.bot_data.get("jellyfin")
+    if jellyfin:
+        await jellyfin.close()

@@ -67,6 +67,7 @@ services:
 - `QBIT_BASE_URL`: qBittorrent WebUI 地址
 - `QBIT_USERNAME`: qBittorrent 用户名
 - `QBIT_PASSWORD`: qBittorrent 密码
+- `QBIT_API_TOKEN`: 可选，qBittorrent Bearer API token。配置后优先使用 token，失败时回退账号密码。
 - `BOT_LOG_LEVEL`: 日志等级，默认 `INFO`
 - `JAV_CATEGORY_NAME`: JAV 自动分类名称，默认 `JAV`
 - `JAV_NAME_REGEX`: JAV 标题匹配规则
