@@ -321,7 +321,7 @@ async def _handle_jav_torrent(
     if selection_result is JavFileSelectionResult.FILTERED:
         notes.append(f"📁 已仅保留大于 {_fmt_large_file_threshold(settings)} 的文件下载，小文件已跳过。")
     elif selection_result is JavFileSelectionResult.NOT_READY:
-        notes.append("⚠️ 文件元数据暂未就绪，尚未完成大小筛选；可稍后发送 `/retryjav <hash>`。")
+        notes.append("⚠️ 文件元数据暂未就绪，尚未完成大小筛选；可稍后发送 <code>/retryjav &lt;hash&gt;</code>。")
 
     await application.bot.send_message(
         chat_id=chat_id,

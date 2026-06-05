@@ -1,6 +1,9 @@
 import re
 import unittest
 
+from telegram.constants import ParseMode
+from telegram.error import BadRequest
+
 from app.config import Settings
 from app.jav_patterns import DEFAULT_JAV_NAME_REGEX
 from app.jobs import (
@@ -35,6 +38,8 @@ class FakeBot:
         self.messages: list[dict] = []
 
     async def send_message(self, **kwargs) -> None:
+        if kwargs.get("parse_mode") == ParseMode.HTML and "<hash>" in kwargs.get("text", ""):
+            raise BadRequest("Can't parse entities: unsupported start tag \"hash\"")
         self.messages.append(kwargs)
 
 
@@ -72,6 +77,7 @@ class FakeQbit:
         torrents: list[TorrentSummary],
         *,
         files: list[TorrentFile] | None = None,
+        fail_small_file_priority: bool = False,
     ) -> None:
         self.torrents = torrents
         self.created_categories: list[str] = []
@@ -80,6 +86,7 @@ class FakeQbit:
         self.files = files or [
             TorrentFile(index=0, name="movie.mp4", size=2 * 1024 * 1024 * 1024, priority=1)
         ]
+        self.fail_small_file_priority = fail_small_file_priority
 
     async def list_torrents(self, *, filter_name: str = "all") -> list[TorrentSummary]:
         return self.torrents
@@ -101,6 +108,15 @@ class FakeQbit:
 
     async def get_torrent_files(self, torrent_hash: str) -> list[TorrentFile]:
         return self.files
+
+    async def set_file_priority(
+        self,
+        torrent_hash: str,
+        file_indexes: list[int],
+        priority: int,
+    ) -> None:
+        if self.fail_small_file_priority and priority == 0:
+            raise RuntimeError("file metadata changed")
 
 
 class FakeApplication:
@@ -195,6 +211,28 @@ class FinalizeTorrentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(app.bot.messages), 1)
         self.assertIn("已识别 JAV", app.bot.messages[0]["text"])
         self.assertNotIn("reply_markup", app.bot.messages[0])
+
+    async def test_jav_not_ready_message_uses_valid_html(self) -> None:
+        app = FakeApplication()
+        qbit = FakeQbit(
+            [_torrent("[FHD-1080] SSIS-123-C")],
+            files=[
+                TorrentFile(
+                    index=0,
+                    name="SSIS-123.mp4",
+                    size=2 * 1024 * 1024 * 1024,
+                    priority=1,
+                ),
+                TorrentFile(index=1, name="cover.jpg", size=1024, priority=1),
+            ],
+            fail_small_file_priority=True,
+        )
+
+        await _background_finalize_torrent(app, qbit, _add_context(), chat_id=1)
+
+        self.assertEqual(len(app.bot.messages), 1)
+        self.assertIn("文件元数据暂未就绪", app.bot.messages[0]["text"])
+        self.assertNotIn("后台处理失败", app.bot.messages[0]["text"])
 
     async def test_jav_torrent_checks_jellyfin_before_category(self) -> None:
         jellyfin = FakeJellyfin(enabled=True)

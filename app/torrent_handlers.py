@@ -173,7 +173,7 @@ async def retry_jav_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if selection_result is JavFileSelectionResult.FILTERED:
         notes.append(f"📁 已仅保留大于 {_fmt_large_file_threshold(settings)} 的文件下载，小文件已跳过。")
     elif selection_result is JavFileSelectionResult.NOT_READY:
-        notes.append("⚠️ 文件元数据暂未就绪，尚未完成大小筛选；请稍后再次发送 `/retryjav <hash>`。")
+        notes.append("⚠️ 文件元数据暂未就绪，尚未完成大小筛选；请稍后再次发送 <code>/retryjav &lt;hash&gt;</code>。")
     await update.message.reply_text("\n".join(notes), parse_mode=ParseMode.HTML)
 
 
