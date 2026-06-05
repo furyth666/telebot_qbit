@@ -78,6 +78,12 @@ services:
       - NO_PROXY=${UNRAID_NO_PROXY}
     volumes:
       - ${UNRAID_APPDATA_DIR}/data:/app/data
+    healthcheck:
+      test: ["CMD-SHELL", "test \"\$TELEGRAM_MODE\" != \"webhook\" || python -c \"import os, socket; port=int(os.environ.get('WEBHOOK_LISTEN_PORT', '8099')); s=socket.create_connection(('127.0.0.1', port), 3); s.close()\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 EOF
 
 ssh "${SSH_OPTS[@]}" "$UNRAID_USER@$UNRAID_HOST" \

@@ -41,7 +41,7 @@ def _run_webhook(app, settings: Settings) -> None:
         url_path=settings.webhook_path,
         webhook_url=webhook_url,
         secret_token=settings.webhook_secret_token or None,
-        bootstrap_retries=-1,
+        bootstrap_retries=settings.webhook_bootstrap_retries,
     )
 
 

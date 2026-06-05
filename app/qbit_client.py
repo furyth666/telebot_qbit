@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Any
 
@@ -36,6 +37,12 @@ class TorrentProperties:
     total_uploaded: int
 
 
+@dataclass(frozen=True)
+class TorrentCategory:
+    name: str
+    save_path: str
+
+
 class QbitClient:
     def __init__(
         self,
@@ -53,8 +60,10 @@ class QbitClient:
             base_url=base_url,
             timeout=20.0,
             headers={"Referer": base_url},
+            trust_env=False,
         )
         self._logged_in = False
+        self._login_lock = asyncio.Lock()
 
     async def close(self) -> None:
         await self._client.aclose()
@@ -63,29 +72,33 @@ class QbitClient:
         if self._logged_in:
             return
 
-        if self.api_token and not self._api_token_failed:
-            self._client.headers["Authorization"] = f"Bearer {self.api_token}"
-            self._logged_in = True
-            return
+        async with self._login_lock:
+            if self._logged_in:
+                return
 
-        self._client.headers.pop("Authorization", None)
-        response = await self._client.post(
-            "/api/v2/auth/login",
-            data={"username": self.username, "password": self.password},
-        )
-        response.raise_for_status()
+            if self.api_token and not self._api_token_failed:
+                self._client.headers["Authorization"] = f"Bearer {self.api_token}"
+                self._logged_in = True
+                return
 
-        login_accepted = (
-            response.text.strip() == "Ok."
-            or (
-                response.status_code == 204
-                and bool(response.headers.get("set-cookie"))
+            self._client.headers.pop("Authorization", None)
+            response = await self._client.post(
+                "/api/v2/auth/login",
+                data={"username": self.username, "password": self.password},
             )
-        )
-        if not login_accepted:
-            raise RuntimeError("qBittorrent 登录失败，请检查账号密码或 WebUI 配置。")
+            response.raise_for_status()
 
-        self._logged_in = True
+            login_accepted = (
+                response.text.strip() == "Ok."
+                or (
+                    response.status_code == 204
+                    and bool(response.headers.get("set-cookie"))
+                )
+            )
+            if not login_accepted:
+                raise RuntimeError("qBittorrent 登录失败，请检查账号密码或 WebUI 配置。")
+
+            self._logged_in = True
 
     async def _request(
         self,
@@ -246,6 +259,17 @@ class QbitClient:
             "/api/v2/torrents/setCategory",
             data={"hashes": torrent_hash, "category": category},
         )
+
+    async def list_categories(self) -> list[TorrentCategory]:
+        response = await self._request("GET", "/api/v2/torrents/categories")
+        payload = response.json()
+        return [
+            TorrentCategory(
+                name=str(item.get("name") or name),
+                save_path=str(item.get("savePath", "")),
+            )
+            for name, item in sorted(payload.items())
+        ]
 
     async def get_torrent_files(self, torrent_hash: str) -> list[TorrentFile]:
         response = await self._request(

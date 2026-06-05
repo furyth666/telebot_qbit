@@ -8,5 +8,11 @@ services:
       - .env
     volumes:
       - ./data:/app/data
+    healthcheck:
+      test: ["CMD-SHELL", "test \"$TELEGRAM_MODE\" != \"webhook\" || python -c \"import os, socket; port=int(os.environ.get('WEBHOOK_LISTEN_PORT', '8099')); s=socket.create_connection(('127.0.0.1', port), 3); s.close()\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
     # 在 unRAID 上使用 host 网络更稳，尤其是宿主机配置了代理时。

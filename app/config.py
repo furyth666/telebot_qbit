@@ -2,6 +2,8 @@ import os
 import re
 from dataclasses import dataclass
 
+from app.jav_patterns import DEFAULT_JAV_NAME_REGEX
+
 
 def _split_user_ids(raw: str) -> list[int]:
     user_ids: list[int] = []
@@ -40,7 +42,7 @@ class Settings:
     telegram_mode: str = "polling"
     bot_log_level: str = "INFO"
     jav_category_name: str = "JAV"
-    jav_name_regex: str = r"[A-Za-z]{2,}-\d{2,}"
+    jav_name_regex: str = DEFAULT_JAV_NAME_REGEX
     jav_large_file_threshold_gb: float = 1.0
     magnet_upload_limit_kib: int = 30
     state_file_path: str = "data/bot_state.sqlite3"
@@ -57,6 +59,7 @@ class Settings:
     telegram_write_timeout_seconds: float = 8.0
     telegram_pool_timeout_seconds: float = 2.0
     telegram_connection_pool_size: int = 8
+    telegram_concurrent_updates: int = 4
     telegram_network_error_restart_threshold: int = 3
     telegram_network_error_window_seconds: int = 180
     webhook_base_url: str = ""
@@ -64,6 +67,7 @@ class Settings:
     webhook_listen_port: int = 8099
     webhook_path: str = ""
     webhook_secret_token: str = ""
+    webhook_bootstrap_retries: int = 3
 
     def validate(self) -> "Settings":
         errors: list[str] = []
@@ -105,6 +109,8 @@ class Settings:
             errors.append("TELEGRAM_POOL_TIMEOUT_SECONDS 必须大于 0")
         if self.telegram_connection_pool_size <= 0:
             errors.append("TELEGRAM_CONNECTION_POOL_SIZE 必须大于 0")
+        if self.telegram_concurrent_updates <= 0:
+            errors.append("TELEGRAM_CONCURRENT_UPDATES 必须大于 0")
         if self.telegram_network_error_restart_threshold <= 0:
             errors.append("TELEGRAM_NETWORK_ERROR_RESTART_THRESHOLD 必须大于 0")
         if self.telegram_network_error_window_seconds <= 0:
@@ -116,6 +122,8 @@ class Settings:
                 errors.append("Webhook 模式需要配置 WEBHOOK_PATH")
             if self.webhook_listen_port <= 0 or self.webhook_listen_port > 65535:
                 errors.append("WEBHOOK_LISTEN_PORT 必须在 1-65535 之间")
+            if self.webhook_bootstrap_retries < 0:
+                errors.append("WEBHOOK_BOOTSTRAP_RETRIES 不能小于 0")
 
         if errors:
             raise ValueError("配置验证失败:\n- " + "\n- ".join(errors))
@@ -135,7 +143,7 @@ class Settings:
             qbit_api_token=os.getenv("QBIT_API_TOKEN", ""),
             bot_log_level=os.getenv("BOT_LOG_LEVEL", "INFO"),
             jav_category_name=os.getenv("JAV_CATEGORY_NAME", "JAV"),
-            jav_name_regex=os.getenv("JAV_NAME_REGEX", r"[A-Za-z]{2,}-\d{2,}"),
+            jav_name_regex=os.getenv("JAV_NAME_REGEX", DEFAULT_JAV_NAME_REGEX),
             jav_large_file_threshold_gb=float(
                 os.getenv("JAV_LARGE_FILE_THRESHOLD_GB", "1")
             ),
@@ -169,6 +177,9 @@ class Settings:
             telegram_connection_pool_size=int(
                 os.getenv("TELEGRAM_CONNECTION_POOL_SIZE", "8")
             ),
+            telegram_concurrent_updates=int(
+                os.getenv("TELEGRAM_CONCURRENT_UPDATES", "4")
+            ),
             telegram_network_error_restart_threshold=int(
                 os.getenv("TELEGRAM_NETWORK_ERROR_RESTART_THRESHOLD", "3")
             ),
@@ -180,4 +191,7 @@ class Settings:
             webhook_listen_port=int(os.getenv("WEBHOOK_LISTEN_PORT", "8099")),
             webhook_path=os.getenv("WEBHOOK_PATH", "").strip("/"),
             webhook_secret_token=os.getenv("WEBHOOK_SECRET_TOKEN", ""),
+            webhook_bootstrap_retries=int(
+                os.getenv("WEBHOOK_BOOTSTRAP_RETRIES", "3")
+            ),
         ).validate()

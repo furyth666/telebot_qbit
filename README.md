@@ -12,6 +12,7 @@
 - `/delete <hash>` 删除任务但保留文件
 - `/deletefiles <hash>` 删除任务和文件
 - `/add <一个或多个 magnet/torrent 链接>` 添加下载
+- 添加种子后通过按钮选择要移动到的 qBittorrent 分类
 - `/retryjav <hash>` 重新执行 JAV 分类和文件筛选
 
 ## 使用方式
@@ -69,7 +70,7 @@ services:
 - `QBIT_PASSWORD`: qBittorrent 密码
 - `QBIT_API_TOKEN`: 可选，qBittorrent Bearer API token。配置后优先使用 token，失败时回退账号密码。
 - `BOT_LOG_LEVEL`: 日志等级，默认 `INFO`
-- `JAV_CATEGORY_NAME`: JAV 自动分类名称，默认 `JAV`
+- `JAV_CATEGORY_NAME`: `/retryjav` 手动重试时使用的 JAV 分类名称，默认 `JAV`
 - `JAV_NAME_REGEX`: JAV 标题匹配规则
 - `JAV_LARGE_FILE_THRESHOLD_GB`: JAV 文件筛选阈值，默认 `1`
 - `MAGNET_UPLOAD_LIMIT_KIB`: magnet 上传限速，默认 `30`
@@ -87,6 +88,7 @@ services:
 - `TELEGRAM_WRITE_TIMEOUT_SECONDS`: Telegram 出站写入超时，默认 `8`
 - `TELEGRAM_POOL_TIMEOUT_SECONDS`: Telegram 连接池等待超时，默认 `2`
 - `TELEGRAM_CONNECTION_POOL_SIZE`: Telegram HTTP 连接池大小，默认 `8`
+- `TELEGRAM_CONCURRENT_UPDATES`: 同时处理的 Telegram update 数量，默认 `4`，避免一个慢 qBittorrent/Jellyfin 请求阻塞所有后续消息。
 - `TELEGRAM_NETWORK_ERROR_RESTART_THRESHOLD`: 短时间 Telegram 网络错误达到多少次后请求 Docker 重启，默认 `3`
 - `TELEGRAM_NETWORK_ERROR_WINDOW_SECONDS`: Telegram 网络错误统计窗口，默认 `180`
 - `WEBHOOK_BASE_URL`: webhook 公网 HTTPS 地址，例如 `https://qbit-bot.example.com`
@@ -94,6 +96,7 @@ services:
 - `WEBHOOK_LISTEN_PORT`: webhook 本地监听端口，默认 `8099`
 - `WEBHOOK_PATH`: webhook 路径，建议使用随机路径
 - `WEBHOOK_SECRET_TOKEN`: Telegram webhook secret token
+- `WEBHOOK_BOOTSTRAP_RETRIES`: webhook 启动时注册 Telegram webhook 的重试次数，默认 `3`。失败后退出交给 Docker 重启，避免进程存活但端口未监听。
 - `HTTP_PROXY` / `HTTPS_PROXY`: 如果你的服务器访问 Telegram 需要代理，可以配置
 - `NO_PROXY`: 本地地址直连，建议包含 `127.0.0.1,localhost` 和 qBittorrent 的局域网地址
 
@@ -107,6 +110,8 @@ Service: http://localhost:8099
 ```
 
 确认 hostname 可以访问后，把 `.env` 中 `TELEGRAM_MODE` 改为 `webhook`，然后重启容器。
+
+Webhook 模式下，如果 qBittorrent 因 unRAID 自动更新短暂返回 `502` 或不可用，bot 会继续保持 webhook 入口在线；qBittorrent 相关命令会在后端恢复后自动恢复。只有 Telegram 自身连续不可达时，watchdog 才会退出并交给 Docker 重启。
 
 ## 部署脚本
 

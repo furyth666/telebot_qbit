@@ -2,26 +2,29 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from enum import Enum
 from html import escape
 
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.ext import Application
 
 from app.add_links import AddContext
 from app.config import Settings
 from app.formatters import _fmt_large_file_threshold, _short_hash
-from app.jav_rules import _extract_jav_code, _is_jav_title, _matches_add_context
-from app.qbit_client import QbitClient, TorrentSummary
+from app.jav_rules import _extract_jav_code, _matches_add_context
+from app.qbit_client import QbitClient, TorrentCategory, TorrentSummary
 from app.runtime_state import _get_jav_pattern, _get_state, _persist_state
 
 
 _CONTEXT_POLL_ATTEMPTS = 20
 _CONTEXT_POLL_INTERVAL_SECONDS = 1
 _FILES_POLL_ATTEMPTS = 10
-_JAV_METADATA_POLL_ATTEMPTS = 60
-_JAV_METADATA_POLL_INTERVAL_SECONDS = 5
+_CATEGORY_BUTTONS_PER_ROW = 2
+_VIDEO_FILE_EXTENSIONS = (".avi", ".m2ts", ".m4v", ".mkv", ".mov", ".mp4", ".ts", ".wmv")
+_FOUR_K_PATTERN = re.compile(r"(?i)(?:^|[^a-z0-9])(?:4k|2160p|uhd)(?:$|[^a-z0-9])")
 
 
 class JavFileSelectionResult(Enum):
@@ -32,6 +35,31 @@ class JavFileSelectionResult(Enum):
 
 def _jav_large_file_threshold_bytes(settings: Settings) -> int:
     return int(settings.jav_large_file_threshold_gb * 1024 * 1024 * 1024)
+
+
+def _looks_like_4k(value: str) -> bool:
+    return bool(_FOUR_K_PATTERN.search(value))
+
+
+def _looks_like_video_file(value: str) -> bool:
+    lowered = value.lower()
+    return lowered.endswith(_VIDEO_FILE_EXTENSIONS)
+
+
+async def _torrent_has_4k_video(qbit: QbitClient, item: TorrentSummary) -> bool:
+    if _looks_like_4k(item.name):
+        return True
+
+    try:
+        files = await qbit.get_torrent_files(item.hash)
+    except Exception:
+        logging.exception("Failed to inspect torrent files for 4K duplicate policy")
+        return False
+
+    return any(
+        _looks_like_video_file(file.name) and _looks_like_4k(file.name)
+        for file in files
+    )
 
 
 async def _purge_expired_jellyfin_duplicate_codes(application: Application) -> None:
@@ -54,17 +82,11 @@ async def _handle_jellyfin_duplicate_for_torrent(
     *,
     chat_id: int,
     is_magnet: bool,
+    code: str,
 ) -> bool:
     settings: Settings = application.bot_data["settings"]
-    if not (settings.jellyfin_duplicate_delete_enabled and is_magnet):
-        return False
-
     jellyfin = application.bot_data["jellyfin"]
     if not jellyfin.enabled:
-        return False
-
-    code = _extract_jav_code(item.name, _get_jav_pattern(application))
-    if not code:
         return False
 
     await _purge_expired_jellyfin_duplicate_codes(application)
@@ -87,6 +109,40 @@ async def _handle_jellyfin_duplicate_for_torrent(
     if not jellyfin_items:
         return False
 
+    first_item_path = jellyfin_items[0].path or jellyfin_items[0].name
+    torrent_is_4k = await _torrent_has_4k_video(qbit, item)
+    jellyfin_has_4k = any(
+        _looks_like_4k(jellyfin_item.name) or _looks_like_4k(jellyfin_item.path)
+        for jellyfin_item in jellyfin_items
+    )
+    if torrent_is_4k and not jellyfin_has_4k:
+        await application.bot.send_message(
+            chat_id=chat_id,
+            text=(
+                "<b>ℹ️ Jellyfin 已有同番号，但本次是 4K 版本</b>\n"
+                f"🎬 任务: <b>{escape(item.name)}</b>\n"
+                f"🏷️ 番号: <code>{escape(code)}</code>\n"
+                f"📚 Jellyfin: <code>{escape(first_item_path)}</code>\n"
+                "库内未识别到 4K 同版本，本次会继续保留下载。"
+            ),
+            parse_mode=ParseMode.HTML,
+        )
+        return False
+
+    if not (settings.jellyfin_duplicate_delete_enabled and is_magnet):
+        await application.bot.send_message(
+            chat_id=chat_id,
+            text=(
+                "<b>ℹ️ Jellyfin 同番号短片已存在</b>\n"
+                f"🎬 任务: <b>{escape(item.name)}</b>\n"
+                f"🏷️ 番号: <code>{escape(code)}</code>\n"
+                f"📚 Jellyfin: <code>{escape(first_item_path)}</code>\n"
+                "当前未启用自动删除，任务会继续保留并按 JAV 处理。"
+            ),
+            parse_mode=ParseMode.HTML,
+        )
+        return False
+
     await qbit.delete_torrent(item.hash, delete_files=False)
     state.jellyfin_duplicate_codes[code] = now + settings.jellyfin_duplicate_grace_hours * 3600
     state.jav_processed_hashes.add(item.hash)
@@ -97,7 +153,7 @@ async def _handle_jellyfin_duplicate_for_torrent(
             "<b>⚠️ Jellyfin 已存在同番号短片</b>\n"
             f"🎬 任务: <b>{escape(item.name)}</b>\n"
             f"🏷️ 番号: <code>{escape(code)}</code>\n"
-            f"📚 Jellyfin: <code>{escape(jellyfin_items[0].path or jellyfin_items[0].name)}</code>\n"
+            f"📚 Jellyfin: <code>{escape(first_item_path)}</code>\n"
             "🗑️ 本次已自动删除 qBittorrent 任务；3 小时内如果你再次添加这个番号，bot 将保留下载，不再自动删除。"
         ),
         parse_mode=ParseMode.HTML,
@@ -105,42 +161,88 @@ async def _handle_jellyfin_duplicate_for_torrent(
     return True
 
 
-async def _apply_jav_category_to_new_torrents(
-    application: Application,
+async def _find_new_torrents(
     qbit: QbitClient,
     context: AddContext,
     *,
     attempts: int = _CONTEXT_POLL_ATTEMPTS,
     interval_seconds: int = _CONTEXT_POLL_INTERVAL_SECONDS,
 ) -> list[TorrentSummary]:
-    settings: Settings = application.bot_data["settings"]
-    pattern = _get_jav_pattern(application)
-    processed_hashes = _get_state(application).jav_processed_hashes
-
-    try:
-        await qbit.create_category(settings.jav_category_name)
-    except Exception:
-        pass
-    categorized: dict[str, TorrentSummary] = {}
-
     for _ in range(attempts):
         torrents = await qbit.list_torrents(filter_name="all")
         new_torrents = [
             item
             for item in torrents
-            if item.hash not in processed_hashes and _matches_add_context(item, context)
+            if _matches_add_context(item, context)
         ]
-        matched = [item for item in new_torrents if _is_jav_title(item.name, pattern)]
-        for item in matched:
-            if item.hash in categorized:
-                continue
-            await qbit.set_category(item.hash, settings.jav_category_name)
-            categorized[item.hash] = item
-        if categorized:
-            return list(categorized.values())
+        if new_torrents:
+            return new_torrents
         await asyncio.sleep(interval_seconds)
 
     return []
+
+
+def _category_choice_keyboard(
+    torrent_hash: str,
+    choices: list[str],
+) -> InlineKeyboardMarkup:
+    buttons = [
+        InlineKeyboardButton(
+            category or "保持未分类",
+            callback_data=f"tor:cat:all:{torrent_hash}:{index}",
+        )
+        for index, category in enumerate(choices)
+    ]
+    rows = [
+        buttons[index : index + _CATEGORY_BUTTONS_PER_ROW]
+        for index in range(0, len(buttons), _CATEGORY_BUTTONS_PER_ROW)
+    ]
+    return InlineKeyboardMarkup(rows)
+
+
+def _category_choices(categories: list[TorrentCategory]) -> list[str]:
+    choices = [item.name for item in categories if item.name]
+    return ["", *choices]
+
+
+async def _send_category_prompt(
+    application: Application,
+    qbit: QbitClient,
+    item: TorrentSummary,
+    *,
+    chat_id: int,
+) -> None:
+    categories = await qbit.list_categories()
+    choices = _category_choices(categories)
+    lock = application.bot_data.get("category_prompt_lock")
+    if lock is None:
+        lock = asyncio.Lock()
+        application.bot_data["category_prompt_lock"] = lock
+
+    async with lock:
+        prompted: set[str] = application.bot_data.setdefault(
+            "prompted_category_hashes",
+            set(),
+        )
+        if item.hash in prompted:
+            return
+        pending: dict[str, list[str]] = application.bot_data.setdefault(
+            "pending_category_choices",
+            {},
+        )
+        pending[item.hash] = choices
+        prompted.add(item.hash)
+
+    await application.bot.send_message(
+        chat_id=chat_id,
+        text=(
+            "<b>请选择移动到哪个分类</b>\n"
+            f"📦 <b>{escape(item.name)}</b>\n"
+            f"🔑 <code>{escape(_short_hash(item.hash))}</code>"
+        ),
+        parse_mode=ParseMode.HTML,
+        reply_markup=_category_choice_keyboard(item.hash, choices),
+    )
 
 
 async def _apply_jav_file_selection(
@@ -174,6 +276,59 @@ async def _apply_jav_file_selection(
         return JavFileSelectionResult.FILTERED
 
     return JavFileSelectionResult.NOT_READY
+
+
+async def _handle_jav_torrent(
+    application: Application,
+    qbit: QbitClient,
+    item: TorrentSummary,
+    *,
+    chat_id: int,
+    is_magnet: bool,
+) -> bool:
+    settings: Settings = application.bot_data["settings"]
+    code = _extract_jav_code(item.name, _get_jav_pattern(application))
+    if not code:
+        return False
+
+    if await _handle_jellyfin_duplicate_for_torrent(
+        application,
+        qbit,
+        item,
+        chat_id=chat_id,
+        is_magnet=is_magnet,
+        code=code,
+    ):
+        return True
+
+    try:
+        await qbit.create_category(settings.jav_category_name)
+    except Exception:
+        pass
+    await qbit.set_category(item.hash, settings.jav_category_name)
+    selection_result = await _apply_jav_file_selection(application, qbit, item.hash)
+
+    state = _get_state(application)
+    state.jav_processed_hashes.add(item.hash)
+    await _persist_state(application)
+
+    notes = [
+        f"<b>已识别 JAV 并移动到 {escape(settings.jav_category_name)}</b>",
+        f"📦 <b>{escape(item.name)}</b>",
+        f"🏷️ 番号: <code>{escape(code)}</code>",
+        f"🔑 <code>{escape(_short_hash(item.hash))}</code>",
+    ]
+    if selection_result is JavFileSelectionResult.FILTERED:
+        notes.append(f"📁 已仅保留大于 {_fmt_large_file_threshold(settings)} 的文件下载，小文件已跳过。")
+    elif selection_result is JavFileSelectionResult.NOT_READY:
+        notes.append("⚠️ 文件元数据暂未就绪，尚未完成大小筛选；可稍后发送 `/retryjav <hash>`。")
+
+    await application.bot.send_message(
+        chat_id=chat_id,
+        text="\n".join(notes),
+        parse_mode=ParseMode.HTML,
+    )
+    return True
 
 
 async def _notify_completion_loop(application: Application) -> None:
@@ -228,31 +383,10 @@ async def _background_finalize_torrent(
     chat_id: int,
 ) -> None:
     try:
-        settings: Settings = application.bot_data["settings"]
-        threshold_text = _fmt_large_file_threshold(settings)
-        categorized = await _apply_jav_category_to_new_torrents(application, qbit, context)
-        late_metadata_match = False
-        if (
-            not categorized
-            and context.is_magnet
-            and context.name_hint
-            and _is_jav_title(context.name_hint, _get_jav_pattern(application))
-        ):
-            categorized = await _apply_jav_category_to_new_torrents(
-                application,
-                qbit,
-                context,
-                attempts=_JAV_METADATA_POLL_ATTEMPTS,
-                interval_seconds=_JAV_METADATA_POLL_INTERVAL_SECONDS,
-            )
-            late_metadata_match = bool(categorized)
-        if categorized:
-            state = _get_state(application)
-            filtered_count = 0
-            not_ready_count = 0
-            retained_categorized: list[TorrentSummary] = []
-            for item in categorized:
-                if await _handle_jellyfin_duplicate_for_torrent(
+        new_torrents = await _find_new_torrents(qbit, context)
+        if new_torrents:
+            for item in new_torrents:
+                if await _handle_jav_torrent(
                     application,
                     qbit,
                     item,
@@ -260,68 +394,26 @@ async def _background_finalize_torrent(
                     is_magnet=context.is_magnet,
                 ):
                     continue
-                state.jav_processed_hashes.add(item.hash)
-                retained_categorized.append(item)
-                selection_result = await _apply_jav_file_selection(application, qbit, item.hash)
-                if selection_result is JavFileSelectionResult.FILTERED:
-                    filtered_count += 1
-                elif selection_result is JavFileSelectionResult.NOT_READY:
-                    not_ready_count += 1
-            await _persist_state(application)
-
-            if not retained_categorized:
-                return
-
-            if len(retained_categorized) == 1:
-                notes = [
-                    f"<b>🗂️ 已自动分类到 {escape(settings.jav_category_name)}</b>",
-                    "检测到新任务名称包含“多个字母-多个数字”的格式。",
-                ]
-                if late_metadata_match:
-                    notes.append("🧲 已在 magnet 元数据完成后补判并自动归类。")
-                if filtered_count:
-                    notes.append(f"📁 已仅保留大于 {threshold_text} 的文件下载，小文件已跳过。")
-                if not_ready_count:
-                    notes.append("⚠️ 文件元数据暂未就绪，尚未完成大小筛选；可以稍后发送 `/retryjav <hash>` 重试。")
-            else:
-                notes = [
-                    f"<b>🗂️ 已自动分类 {len(retained_categorized)} 个任务到 {escape(settings.jav_category_name)}</b>",
-                    "检测到这些新任务名称包含“多个字母-多个数字”的格式。",
-                ]
-                if late_metadata_match:
-                    notes.append("🧲 这些任务是在 magnet 元数据完成后补判归类的。")
-                if filtered_count:
-                    notes.append(
-                        f"📁 其中 {filtered_count} 个任务已仅保留大于 {threshold_text} 的文件下载，小文件已跳过。"
-                    )
-                if not_ready_count:
-                    notes.append(
-                        f"⚠️ 其中 {not_ready_count} 个任务文件元数据暂未就绪，尚未完成大小筛选；可以稍后用 `/retryjav <hash>` 重试。"
-                    )
-            await application.bot.send_message(
-                chat_id=chat_id,
-                text="\n".join(notes),
-                parse_mode=ParseMode.HTML,
-            )
+                await _send_category_prompt(application, qbit, item, chat_id=chat_id)
             return
 
-        if context.name_hint and _is_jav_title(context.name_hint, _get_jav_pattern(application)):
+        if context.name_hint:
             await application.bot.send_message(
                 chat_id=chat_id,
                 text=(
-                    "<b>⚠️ JAV 自动分类未完成</b>\n"
+                    "<b>⚠️ 暂时没有定位到新任务</b>\n"
                     f"目标: <b>{escape(context.name_hint)}</b>\n"
-                    "可以稍后发送 `/retryjav <hash>` 重新处理。"
+                    "可以稍后在任务列表里手动调整分类。"
                 ),
                 parse_mode=ParseMode.HTML,
             )
     except Exception:
-        logging.exception("Failed to auto-categorize newly added torrent")
+        logging.exception("Failed to prompt category for newly added torrent")
         await application.bot.send_message(
             chat_id=chat_id,
             text=(
                 "<b>⚠️ 后台处理失败</b>\n"
-                "自动分类或文件筛选没有完成，可以稍后发送 `/retryjav <hash>` 重试。"
+                "没有完成分类选择提示，可以稍后在任务列表里手动调整分类。"
             ),
             parse_mode=ParseMode.HTML,
         )

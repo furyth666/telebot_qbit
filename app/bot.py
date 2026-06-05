@@ -64,6 +64,7 @@ def create_application(settings: Settings) -> Application:
         Application.builder()
         .token(settings.telegram_bot_token)
         .request(telegram_request)
+        .concurrent_updates(settings.telegram_concurrent_updates)
         .post_init(post_init)
         .post_shutdown(post_shutdown)
         .build()

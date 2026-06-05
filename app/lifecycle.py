@@ -19,30 +19,51 @@ from app.state_store import StateStore
 async def _watchdog_loop(application: Application) -> None:
     settings: Settings = application.bot_data["settings"]
     qbit: QbitClient = application.bot_data["qbit"]
-    failures = 0
+    telegram_failures = 0
+    qbit_failures = 0
 
     while True:
         await asyncio.sleep(settings.watchdog_interval_seconds)
         try:
             await application.bot.get_me()
-            await qbit.get_transfer_info()
             application.bot_data["telegram_network_error_times"] = []
-            if failures:
-                logging.info("Watchdog recovered after %s failed check(s)", failures)
-            failures = 0
+            if telegram_failures:
+                logging.info(
+                    "Telegram watchdog recovered after %s failed check(s)",
+                    telegram_failures,
+                )
+            telegram_failures = 0
+        except asyncio.CancelledError:
+            raise
+        except TelegramError:
+            telegram_failures += 1
+            logging.exception(
+                "Telegram watchdog health check failed (%s/%s)",
+                telegram_failures,
+                settings.watchdog_max_failures,
+            )
+            if telegram_failures >= settings.watchdog_max_failures:
+                logging.critical("Telegram watchdog failure limit reached; requesting graceful shutdown")
+                application.stop_running()
+                return
+
+        try:
+            await qbit.get_transfer_info()
         except asyncio.CancelledError:
             raise
         except Exception:
-            failures += 1
+            qbit_failures += 1
             logging.exception(
-                "Watchdog health check failed (%s/%s)",
-                failures,
-                settings.watchdog_max_failures,
+                "qBittorrent watchdog health check failed (%s); keeping bot running",
+                qbit_failures,
             )
-            if failures >= settings.watchdog_max_failures:
-                logging.critical("Watchdog failure limit reached; requesting graceful shutdown")
-                application.stop_running()
-                return
+        else:
+            if qbit_failures:
+                logging.info(
+                    "qBittorrent watchdog recovered after %s failed check(s)",
+                    qbit_failures,
+                )
+            qbit_failures = 0
 
 
 async def post_init(application: Application) -> None:

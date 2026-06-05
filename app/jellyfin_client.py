@@ -31,6 +31,7 @@ class JellyfinClient:
             base_url=base_url,
             timeout=20.0,
             headers={"X-Emby-Token": api_key},
+            trust_env=False,
         )
 
     @property

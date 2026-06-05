@@ -310,6 +310,38 @@ async def torrent_callback_handler(update: Update, context: ContextTypes.DEFAULT
             )
             await query.answer("已删除任务和文件")
             return
+
+        if action == "cat":
+            try:
+                torrent_hash, index_text = payload.rsplit(":", 1)
+                category_index = int(index_text)
+            except ValueError:
+                await query.answer("这个分类按钮已经过期或不可用。", show_alert=True)
+                return
+            pending = context.application.bot_data.get("pending_category_choices", {})
+            choices = pending.get(torrent_hash)
+            if not choices or category_index < 0 or category_index >= len(choices):
+                await query.answer("这个分类按钮已经过期或不可用。", show_alert=True)
+                return
+            category = choices[category_index]
+            await qbit.set_category(torrent_hash, category)
+            pending.pop(torrent_hash, None)
+            prompted = context.application.bot_data.get("prompted_category_hashes")
+            if prompted:
+                prompted.discard(torrent_hash)
+            label = category or "未分类"
+            await query.edit_message_text(
+                "\n".join(
+                    [
+                        "<b>已更新任务分类</b>",
+                        f"🗂️ 分类: <code>{escape(label)}</code>",
+                        f"🔑 任务 Hash: <code>{escape(torrent_hash)}</code>",
+                    ]
+                ),
+                parse_mode=ParseMode.HTML,
+            )
+            await query.answer(f"已移动到 {label}")
+            return
         await query.answer("这个按钮已经过期或不可用。", show_alert=True)
     except Exception as exc:
         await _callback_action_error(query, exc)
