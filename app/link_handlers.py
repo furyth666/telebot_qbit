@@ -124,13 +124,7 @@ async def add_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     chat = update.effective_chat
     if not chat:
         return
-    await update.message.reply_text("已收到下载链接，正在提交到 qBittorrent...")
-    try:
-        result = await _add_torrent_links(context.application, qbit, links)
-    except Exception:
-        logging.exception("Failed while adding torrent links")
-        await update.message.reply_text("提交到 qBittorrent 失败，请稍后重试。")
-        return
+    result = await _add_torrent_links(context.application, qbit, links)
     await update.message.reply_text(
         _format_add_batch_reply(
             result,
@@ -220,13 +214,7 @@ async def text_link_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     chat = update.effective_chat
     if not chat:
         return
-    await message.reply_text("已收到下载链接，正在提交到 qBittorrent...")
-    try:
-        result = await _add_torrent_links(context.application, qbit, links)
-    except Exception:
-        logging.exception("Failed while adding torrent links")
-        await message.reply_text("提交到 qBittorrent 失败，请稍后重试。")
-        return
+    result = await _add_torrent_links(context.application, qbit, links)
     await message.reply_text(
         _format_add_batch_reply(
             result,
