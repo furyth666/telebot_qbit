@@ -2,16 +2,17 @@
 
 ## Goal
 
-Finalize newly added torrents by identifying JAV first; only non-JAV torrents should ask for manual category selection.
+Finalize newly added torrents by letting an LLM choose the qBittorrent category.
+The bot still validates the decision before applying it.
 
 ## Tasks
 
-1. Keep Jellyfin duplicate deletion as the first post-add guard.
-2. If the torrent name contains a valid JAV code, check Jellyfin for the same code before categorizing.
-3. If Jellyfin already has the same code, delete only when duplicate deletion is enabled and the 4K policy allows it.
-4. Keep a new 4K torrent when Jellyfin only has a non-4K copy; delete it only when Jellyfin also has a 4K copy.
-5. If the JAV torrent is retained, create/set the JAV category, apply large-file filtering, record the processed hash, and notify Telegram.
-6. If the torrent is not JAV, show the existing category selection buttons.
+1. Add LLM classification settings without making LLM credentials required.
+2. Add an OpenAI-compatible classifier that returns structured category decisions.
+3. Collect torrent name, size, current category, available categories, and file metadata for the classifier.
+4. Apply the LLM category only when it is enabled, confident enough, and matches an existing qBittorrent category.
+5. Fall back to the existing manual category prompt when the LLM is disabled, unavailable, low-confidence, or returns an invalid category.
+6. Notify Telegram when a category was applied automatically, while keeping manual correction buttons available.
 
 ## Verification
 

@@ -51,6 +51,12 @@ class Settings:
     jellyfin_api_key: str = ""
     jellyfin_duplicate_delete_enabled: bool = False
     jellyfin_duplicate_grace_hours: int = 3
+    llm_classify_enabled: bool = False
+    llm_api_base_url: str = "https://api.openai.com/v1"
+    llm_api_key: str = ""
+    llm_model: str = "gpt-4.1-mini"
+    llm_min_confidence: float = 0.85
+    llm_request_timeout_seconds: float = 20.0
     watchdog_enabled: bool = True
     watchdog_interval_seconds: int = 300
     watchdog_max_failures: int = 3
@@ -95,6 +101,16 @@ class Settings:
             errors.append("MAGNET_UPLOAD_LIMIT_KIB 不能小于 0")
         if self.jellyfin_duplicate_grace_hours <= 0:
             errors.append("JELLYFIN_DUPLICATE_GRACE_HOURS 必须大于 0")
+        if self.llm_classify_enabled and not self.llm_api_key.strip():
+            errors.append("LLM_CLASSIFY_ENABLED=true 时必须配置 LLM_API_KEY")
+        if not self.llm_api_base_url:
+            errors.append("LLM_API_BASE_URL 不能为空")
+        if not self.llm_model:
+            errors.append("LLM_MODEL 不能为空")
+        if self.llm_min_confidence < 0 or self.llm_min_confidence > 1:
+            errors.append("LLM_MIN_CONFIDENCE 必须在 0 到 1 之间")
+        if self.llm_request_timeout_seconds <= 0:
+            errors.append("LLM_REQUEST_TIMEOUT_SECONDS 必须大于 0")
         if self.watchdog_interval_seconds <= 0:
             errors.append("WATCHDOG_INTERVAL_SECONDS 必须大于 0")
         if self.watchdog_max_failures <= 0:
@@ -158,6 +174,17 @@ class Settings:
             ),
             jellyfin_duplicate_grace_hours=int(
                 os.getenv("JELLYFIN_DUPLICATE_GRACE_HOURS", "3")
+            ),
+            llm_classify_enabled=_as_bool(os.getenv("LLM_CLASSIFY_ENABLED"), False),
+            llm_api_base_url=os.getenv(
+                "LLM_API_BASE_URL",
+                "https://api.openai.com/v1",
+            ).rstrip("/"),
+            llm_api_key=os.getenv("LLM_API_KEY", ""),
+            llm_model=os.getenv("LLM_MODEL", "gpt-4.1-mini"),
+            llm_min_confidence=float(os.getenv("LLM_MIN_CONFIDENCE", "0.85")),
+            llm_request_timeout_seconds=float(
+                os.getenv("LLM_REQUEST_TIMEOUT_SECONDS", "20")
             ),
             watchdog_enabled=_as_bool(os.getenv("WATCHDOG_ENABLED"), True),
             watchdog_interval_seconds=int(os.getenv("WATCHDOG_INTERVAL_SECONDS", "300")),

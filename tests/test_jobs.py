@@ -1,5 +1,6 @@
 import re
 import unittest
+from unittest.mock import patch
 
 from telegram.constants import ParseMode
 from telegram.error import BadRequest
@@ -13,6 +14,11 @@ from app.jobs import (
 )
 from app.add_links import AddContext
 from app.jellyfin_client import JellyfinItem
+from app.llm_classifier import (
+    LlmCategoryDecision,
+    _ollama_native_base_url,
+    _strip_source_markers,
+)
 from app.qbit_client import TorrentCategory, TorrentFile, TorrentSummary
 from app.state_store import BotState
 
@@ -93,6 +99,7 @@ class FakeQbit:
 
     async def list_categories(self) -> list[TorrentCategory]:
         return [
+            TorrentCategory(name="AV", save_path="/downloads/av"),
             TorrentCategory(name="JAV", save_path="/downloads/jav"),
             TorrentCategory(name="TV", save_path="/downloads/tv"),
         ]
@@ -125,6 +132,7 @@ class FakeApplication:
         *,
         jellyfin: FakeJellyfin | None = None,
         jellyfin_duplicate_delete_enabled: bool = False,
+        llm_classify_enabled: bool = False,
     ) -> None:
         self.bot = FakeBot()
         self.state_store = FakeStateStore()
@@ -136,6 +144,8 @@ class FakeApplication:
                 qbit_username="user",
                 qbit_password="pass",
                 jellyfin_duplicate_delete_enabled=jellyfin_duplicate_delete_enabled,
+                llm_classify_enabled=llm_classify_enabled,
+                llm_api_key="llm-key" if llm_classify_enabled else "",
             ),
             "jav_name_pattern": re.compile(DEFAULT_JAV_NAME_REGEX),
             "bot_state": BotState(),
@@ -170,16 +180,17 @@ class CategoryPromptTests(unittest.TestCase):
     def test_category_choices_include_uncategorized_first(self) -> None:
         choices = _category_choices(
             [
+                TorrentCategory(name="AV", save_path="/downloads/av"),
                 TorrentCategory(name="JAV", save_path="/downloads/jav"),
                 TorrentCategory(name="TV", save_path="/downloads/tv"),
             ]
         )
 
-        self.assertEqual(choices, ["", "JAV", "TV"])
+        self.assertEqual(choices, ["", "AV", "JAV", "TV"])
 
     def test_category_keyboard_uses_hash_and_index_payloads(self) -> None:
         torrent_hash = "a" * 40
-        keyboard = _category_choice_keyboard(torrent_hash, ["", "JAV", "TV"])
+        keyboard = _category_choice_keyboard(torrent_hash, ["", "AV", "JAV", "TV"])
         payloads = [
             button.callback_data
             for row in keyboard.inline_keyboard
@@ -192,123 +203,37 @@ class CategoryPromptTests(unittest.TestCase):
                 f"tor:cat:all:{torrent_hash}:0",
                 f"tor:cat:all:{torrent_hash}:1",
                 f"tor:cat:all:{torrent_hash}:2",
+                f"tor:cat:all:{torrent_hash}:3",
             ],
         )
         self.assertTrue(all(len(item.encode("utf-8")) <= 64 for item in payloads))
 
 
+class LlmClassifierTests(unittest.TestCase):
+    def test_local_ollama_v1_url_uses_native_base_url(self) -> None:
+        self.assertEqual(
+            _ollama_native_base_url("http://127.0.0.1:11434/v1"),
+            "http://127.0.0.1:11434",
+        )
+        self.assertEqual(
+            _ollama_native_base_url("http://localhost:11434/v1"),
+            "http://localhost:11434",
+        )
+        self.assertIsNone(_ollama_native_base_url("https://api.openai.com/v1"))
+
+    def test_strip_source_markers_removes_javdb_noise(self) -> None:
+        self.assertEqual(
+            _strip_source_markers("[JAVdb.com] SSIS-123-C.mp4"),
+            "SSIS-123-C.mp4",
+        )
+        self.assertEqual(
+            _strip_source_markers("JAVDB SSIS-123-C"),
+            "SSIS-123-C",
+        )
+
+
 class FinalizeTorrentTests(unittest.IsolatedAsyncioTestCase):
-    async def test_jav_torrent_is_processed_without_category_prompt(self) -> None:
-        app = FakeApplication()
-        qbit = FakeQbit([_torrent("[FHD-1080] SSIS-123-C")])
-
-        await _background_finalize_torrent(app, qbit, _add_context(), chat_id=1)
-
-        self.assertEqual(qbit.created_categories, ["JAV"])
-        self.assertEqual(qbit.set_categories, [("a" * 40, "JAV")])
-        self.assertIn("a" * 40, app.bot_data["bot_state"].jav_processed_hashes)
-        self.assertEqual(app.state_store.save_calls, 1)
-        self.assertEqual(len(app.bot.messages), 1)
-        self.assertIn("已识别 JAV", app.bot.messages[0]["text"])
-        self.assertNotIn("reply_markup", app.bot.messages[0])
-
-    async def test_jav_not_ready_message_uses_valid_html(self) -> None:
-        app = FakeApplication()
-        qbit = FakeQbit(
-            [_torrent("[FHD-1080] SSIS-123-C")],
-            files=[
-                TorrentFile(
-                    index=0,
-                    name="SSIS-123.mp4",
-                    size=2 * 1024 * 1024 * 1024,
-                    priority=1,
-                ),
-                TorrentFile(index=1, name="cover.jpg", size=1024, priority=1),
-            ],
-            fail_small_file_priority=True,
-        )
-
-        await _background_finalize_torrent(app, qbit, _add_context(), chat_id=1)
-
-        self.assertEqual(len(app.bot.messages), 1)
-        self.assertIn("文件元数据暂未就绪", app.bot.messages[0]["text"])
-        self.assertNotIn("后台处理失败", app.bot.messages[0]["text"])
-
-    async def test_jav_torrent_checks_jellyfin_before_category(self) -> None:
-        jellyfin = FakeJellyfin(enabled=True)
-        app = FakeApplication(jellyfin=jellyfin)
-        qbit = FakeQbit([_torrent("[FHD-1080] SSIS-123-C")])
-
-        await _background_finalize_torrent(app, qbit, _add_context(), chat_id=1)
-
-        self.assertEqual(jellyfin.queries, ["SSIS-123"])
-        self.assertEqual(qbit.set_categories, [("a" * 40, "JAV")])
-
-    async def test_existing_jellyfin_duplicate_is_deleted_before_category(self) -> None:
-        jellyfin = FakeJellyfin([_jellyfin_item()], enabled=True)
-        app = FakeApplication(
-            jellyfin=jellyfin,
-            jellyfin_duplicate_delete_enabled=True,
-        )
-        qbit = FakeQbit([_torrent("[FHD-1080] SSIS-123-C")])
-
-        await _background_finalize_torrent(app, qbit, _add_context(), chat_id=1)
-
-        self.assertEqual(jellyfin.queries, ["SSIS-123"])
-        self.assertEqual(qbit.deleted_torrents, [("a" * 40, False)])
-        self.assertEqual(qbit.set_categories, [])
-        self.assertIn("Jellyfin 已存在同番号", app.bot.messages[0]["text"])
-
-    async def test_4k_torrent_is_kept_when_jellyfin_duplicate_is_not_4k(self) -> None:
-        jellyfin = FakeJellyfin([_jellyfin_item(path_suffix=".1080p")], enabled=True)
-        app = FakeApplication(
-            jellyfin=jellyfin,
-            jellyfin_duplicate_delete_enabled=True,
-        )
-        qbit = FakeQbit(
-            [_torrent("[FHD] SSIS-123")],
-            files=[
-                TorrentFile(
-                    index=0,
-                    name="SSIS-123.2160p.mkv",
-                    size=2 * 1024 * 1024 * 1024,
-                    priority=1,
-                )
-            ],
-        )
-
-        await _background_finalize_torrent(app, qbit, _add_context(), chat_id=1)
-
-        self.assertEqual(jellyfin.queries, ["SSIS-123"])
-        self.assertEqual(qbit.deleted_torrents, [])
-        self.assertEqual(qbit.set_categories, [("a" * 40, "JAV")])
-        self.assertIn("本次是 4K 版本", app.bot.messages[0]["text"])
-
-    async def test_4k_torrent_is_deleted_when_jellyfin_duplicate_is_also_4k(self) -> None:
-        jellyfin = FakeJellyfin([_jellyfin_item(path_suffix=".2160p")], enabled=True)
-        app = FakeApplication(
-            jellyfin=jellyfin,
-            jellyfin_duplicate_delete_enabled=True,
-        )
-        qbit = FakeQbit(
-            [_torrent("[FHD] SSIS-123")],
-            files=[
-                TorrentFile(
-                    index=0,
-                    name="SSIS-123.2160p.mkv",
-                    size=2 * 1024 * 1024 * 1024,
-                    priority=1,
-                )
-            ],
-        )
-
-        await _background_finalize_torrent(app, qbit, _add_context(), chat_id=1)
-
-        self.assertEqual(jellyfin.queries, ["SSIS-123"])
-        self.assertEqual(qbit.deleted_torrents, [("a" * 40, False)])
-        self.assertEqual(qbit.set_categories, [])
-
-    async def test_non_jav_torrent_gets_category_prompt(self) -> None:
+    async def test_llm_disabled_torrent_gets_category_prompt(self) -> None:
         app = FakeApplication()
         qbit = FakeQbit([_torrent("ubuntu-24.04-live-server.iso")])
 
@@ -319,3 +244,120 @@ class FinalizeTorrentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(app.bot.messages), 1)
         self.assertIn("请选择移动到哪个分类", app.bot.messages[0]["text"])
         self.assertIn("reply_markup", app.bot.messages[0])
+
+    async def test_llm_applies_valid_high_confidence_category(self) -> None:
+        app = FakeApplication(llm_classify_enabled=True)
+        qbit = FakeQbit([_torrent("The.Show.S01E01.mkv")])
+
+        with patch(
+            "app.jobs.classify_torrent",
+            return_value=LlmCategoryDecision(
+                category="TV",
+                confidence=0.92,
+                reason="episode naming",
+            ),
+        ) as classifier:
+            await _background_finalize_torrent(app, qbit, _add_context(), chat_id=1)
+
+        classifier.assert_awaited_once()
+        self.assertEqual(qbit.set_categories, [("a" * 40, "TV")])
+        self.assertEqual(len(app.bot.messages), 1)
+        self.assertIn("已由大模型自动分类", app.bot.messages[0]["text"])
+        self.assertIn("分类: <code>TV</code>", app.bot.messages[0]["text"])
+        self.assertIn("reply_markup", app.bot.messages[0])
+
+    async def test_llm_javdb_source_marker_is_ignored_before_llm_classification(
+        self,
+    ) -> None:
+        app = FakeApplication(llm_classify_enabled=True)
+        qbit = FakeQbit([_torrent("[JAVdb.com] IPZZ-744-C.torrent")])
+
+        with patch(
+            "app.jobs.classify_torrent",
+            return_value=LlmCategoryDecision(
+                category="JAV",
+                confidence=0.99,
+                reason="Japanese adult product code after ignoring source marker",
+            ),
+        ) as classifier:
+            await _background_finalize_torrent(app, qbit, _add_context(), chat_id=1)
+
+        classifier.assert_awaited_once()
+        self.assertEqual(qbit.set_categories, [("a" * 40, "JAV")])
+        self.assertEqual(len(app.bot.messages), 1)
+        self.assertIn("分类: <code>JAV</code>", app.bot.messages[0]["text"])
+
+    async def test_llm_jav_decision_without_javdb_marker_keeps_jav_category(self) -> None:
+        app = FakeApplication(llm_classify_enabled=True)
+        qbit = FakeQbit([_torrent("JAV-release-example.mkv")])
+
+        with patch(
+            "app.jobs.classify_torrent",
+            return_value=LlmCategoryDecision(
+                category="JAV",
+                confidence=0.99,
+                reason="belongs to standalone JAV category",
+            ),
+        ):
+            await _background_finalize_torrent(app, qbit, _add_context(), chat_id=1)
+
+        self.assertEqual(qbit.set_categories, [("a" * 40, "JAV")])
+        self.assertEqual(len(app.bot.messages), 1)
+        self.assertIn("分类: <code>JAV</code>", app.bot.messages[0]["text"])
+
+    async def test_llm_low_confidence_falls_back_to_category_prompt(self) -> None:
+        app = FakeApplication(llm_classify_enabled=True)
+        qbit = FakeQbit([_torrent("unclear-download")])
+
+        with patch(
+            "app.jobs.classify_torrent",
+            return_value=LlmCategoryDecision(
+                category="TV",
+                confidence=0.5,
+                reason="unclear",
+            ),
+        ):
+            await _background_finalize_torrent(app, qbit, _add_context(), chat_id=1)
+
+        self.assertEqual(qbit.set_categories, [])
+        self.assertEqual(len(app.bot.messages), 1)
+        self.assertIn("大模型没有给出可靠分类", app.bot.messages[0]["text"])
+        self.assertIn("reply_markup", app.bot.messages[0])
+
+    async def test_llm_invalid_category_falls_back_to_category_prompt(self) -> None:
+        app = FakeApplication(llm_classify_enabled=True)
+        qbit = FakeQbit([_torrent("movie.mkv")])
+
+        with patch(
+            "app.jobs.classify_torrent",
+            return_value=LlmCategoryDecision(
+                category="Movies",
+                confidence=0.95,
+                reason="movie title",
+            ),
+        ):
+            await _background_finalize_torrent(app, qbit, _add_context(), chat_id=1)
+
+        self.assertEqual(qbit.set_categories, [])
+        self.assertEqual(len(app.bot.messages), 1)
+        self.assertIn("大模型没有给出可靠分类", app.bot.messages[0]["text"])
+        self.assertIn("reply_markup", app.bot.messages[0])
+
+    async def test_duplicate_finalize_does_not_repeat_llm_message(self) -> None:
+        app = FakeApplication(llm_classify_enabled=True)
+        qbit = FakeQbit([_torrent("The.Show.S01E01.mkv")])
+
+        with patch(
+            "app.jobs.classify_torrent",
+            return_value=LlmCategoryDecision(
+                category="TV",
+                confidence=0.92,
+                reason="episode naming",
+            ),
+        ) as classifier:
+            await _background_finalize_torrent(app, qbit, _add_context(), chat_id=1)
+            await _background_finalize_torrent(app, qbit, _add_context(), chat_id=1)
+
+        classifier.assert_awaited_once()
+        self.assertEqual(len(app.bot.messages), 1)
+        self.assertEqual(qbit.set_categories, [("a" * 40, "TV")])

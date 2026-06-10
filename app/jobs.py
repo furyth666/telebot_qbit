@@ -15,6 +15,7 @@ from app.add_links import AddContext
 from app.config import Settings
 from app.formatters import _fmt_large_file_threshold, _short_hash
 from app.jav_rules import _extract_jav_code, _matches_add_context
+from app.llm_classifier import classify_torrent
 from app.qbit_client import QbitClient, TorrentCategory, TorrentSummary
 from app.runtime_state import _get_jav_pattern, _get_state, _persist_state
 
@@ -205,15 +206,20 @@ def _category_choices(categories: list[TorrentCategory]) -> list[str]:
     return ["", *choices]
 
 
-async def _send_category_prompt(
+def _canonical_llm_category(
+    category: str,
+    allowed_categories: set[str],
+) -> str:
+    stripped = category.strip()
+    by_casefold = {item.casefold(): item for item in allowed_categories}
+    return by_casefold.get(stripped.casefold(), stripped)
+
+
+async def _register_category_choices(
     application: Application,
-    qbit: QbitClient,
-    item: TorrentSummary,
-    *,
-    chat_id: int,
-) -> None:
-    categories = await qbit.list_categories()
-    choices = _category_choices(categories)
+    torrent_hash: str,
+    choices: list[str],
+) -> bool:
     lock = application.bot_data.get("category_prompt_lock")
     if lock is None:
         lock = asyncio.Lock()
@@ -224,14 +230,28 @@ async def _send_category_prompt(
             "prompted_category_hashes",
             set(),
         )
-        if item.hash in prompted:
-            return
+        if torrent_hash in prompted:
+            return False
         pending: dict[str, list[str]] = application.bot_data.setdefault(
             "pending_category_choices",
             {},
         )
-        pending[item.hash] = choices
-        prompted.add(item.hash)
+        pending[torrent_hash] = choices
+        prompted.add(torrent_hash)
+        return True
+
+
+async def _send_category_prompt(
+    application: Application,
+    qbit: QbitClient,
+    item: TorrentSummary,
+    *,
+    chat_id: int,
+) -> None:
+    categories = await qbit.list_categories()
+    choices = _category_choices(categories)
+    if not await _register_category_choices(application, item.hash, choices):
+        return
 
     await application.bot.send_message(
         chat_id=chat_id,
@@ -243,6 +263,83 @@ async def _send_category_prompt(
         parse_mode=ParseMode.HTML,
         reply_markup=_category_choice_keyboard(item.hash, choices),
     )
+
+
+async def _handle_llm_category_torrent(
+    application: Application,
+    qbit: QbitClient,
+    item: TorrentSummary,
+    *,
+    chat_id: int,
+) -> bool:
+    settings: Settings = application.bot_data["settings"]
+    if not settings.llm_classify_enabled:
+        return False
+
+    categories = await qbit.list_categories()
+    choices = _category_choices(categories)
+    allowed_categories = set(choices)
+    if not await _register_category_choices(application, item.hash, choices):
+        return True
+
+    try:
+        files = await qbit.get_torrent_files(item.hash)
+    except Exception:
+        logging.exception("Failed to read torrent files before LLM classification")
+        files = []
+
+    try:
+        decision = await classify_torrent(settings, item, files, categories)
+    except Exception:
+        logging.exception("LLM category classification failed")
+        await application.bot.send_message(
+            chat_id=chat_id,
+            text=(
+                "<b>⚠️ 大模型分类失败</b>\n"
+                f"📦 <b>{escape(item.name)}</b>\n"
+                "请手动选择分类。"
+            ),
+            parse_mode=ParseMode.HTML,
+            reply_markup=_category_choice_keyboard(item.hash, choices),
+        )
+        return True
+
+    category = _canonical_llm_category(decision.category, allowed_categories)
+    if (
+        category not in allowed_categories
+        or decision.confidence < settings.llm_min_confidence
+    ):
+        await application.bot.send_message(
+            chat_id=chat_id,
+            text=(
+                "<b>⚠️ 大模型没有给出可靠分类</b>\n"
+                f"📦 <b>{escape(item.name)}</b>\n"
+                f"建议: <code>{escape(category or decision.category or '未分类')}</code>\n"
+                f"置信度: <code>{decision.confidence:.2f}</code>\n"
+                "请手动选择分类。"
+            ),
+            parse_mode=ParseMode.HTML,
+            reply_markup=_category_choice_keyboard(item.hash, choices),
+        )
+        return True
+
+    await qbit.set_category(item.hash, category)
+    label = category or "未分类"
+    reason = decision.reason or "未提供理由"
+    await application.bot.send_message(
+        chat_id=chat_id,
+        text=(
+            "<b>已由大模型自动分类</b>\n"
+            f"📦 <b>{escape(item.name)}</b>\n"
+            f"🗂️ 分类: <code>{escape(label)}</code>\n"
+            f"置信度: <code>{decision.confidence:.2f}</code>\n"
+            f"理由: {escape(reason)}\n"
+            f"🔑 <code>{escape(_short_hash(item.hash))}</code>"
+        ),
+        parse_mode=ParseMode.HTML,
+        reply_markup=_category_choice_keyboard(item.hash, choices),
+    )
+    return True
 
 
 async def _apply_jav_file_selection(
@@ -386,12 +483,11 @@ async def _background_finalize_torrent(
         new_torrents = await _find_new_torrents(qbit, context)
         if new_torrents:
             for item in new_torrents:
-                if await _handle_jav_torrent(
+                if await _handle_llm_category_torrent(
                     application,
                     qbit,
                     item,
                     chat_id=chat_id,
-                    is_magnet=context.is_magnet,
                 ):
                     continue
                 await _send_category_prompt(application, qbit, item, chat_id=chat_id)

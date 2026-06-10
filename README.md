@@ -80,6 +80,12 @@ services:
 - `JELLYFIN_API_KEY`: Jellyfin API Key
 - `JELLYFIN_DUPLICATE_DELETE_ENABLED`: 是否启用 Jellyfin 重复检查
 - `JELLYFIN_DUPLICATE_GRACE_HOURS`: 同番号再次添加的保留窗口，默认 `3`
+- `LLM_CLASSIFY_ENABLED`: 是否启用大模型自动分类，默认 `false`
+- `LLM_API_BASE_URL`: OpenAI-compatible API 地址，默认 `https://api.openai.com/v1`
+- `LLM_API_KEY`: 大模型 API Key，启用自动分类时必填
+- `LLM_MODEL`: 分类模型，默认 `gpt-4.1-mini`
+- `LLM_MIN_CONFIDENCE`: 自动应用分类的最低置信度，默认 `0.85`
+- `LLM_REQUEST_TIMEOUT_SECONDS`: 大模型请求超时，默认 `20`
 - `WATCHDOG_ENABLED`: 是否启用 bot 自检，默认 `true`
 - `WATCHDOG_INTERVAL_SECONDS`: 自检间隔，默认 `300`
 - `WATCHDOG_MAX_FAILURES`: 连续失败多少次后退出并交给 Docker 重启，默认 `3`
