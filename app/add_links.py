@@ -151,7 +151,7 @@ async def _add_torrent_url(
         context=AddContext(
             known_hashes=set(known_hashes),
             started_at=int(time.time()),
-            name_hint=_extract_name_hint(url),
+            name_hint=_extract_name_hint(url) if is_magnet else None,
             is_magnet=is_magnet,
         ),
     )

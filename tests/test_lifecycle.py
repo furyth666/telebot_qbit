@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from telegram.error import NetworkError, TelegramError
 
 from app.config import Settings
-from app.lifecycle import _watchdog_loop
+from app.lifecycle import _watchdog_loop, post_shutdown
 
 
 class FakeBot:
@@ -24,12 +24,16 @@ class FakeQbit:
     def __init__(self, *, error: Exception | None = None) -> None:
         self.error = error
         self.calls = 0
+        self.closed = False
 
     async def get_transfer_info(self) -> object:
         self.calls += 1
         if self.error:
             raise self.error
         return object()
+
+    async def close(self) -> None:
+        self.closed = True
 
 
 class FakeApplication:
@@ -97,3 +101,17 @@ class WatchdogLoopTests(unittest.IsolatedAsyncioTestCase):
 
         await task
         self.assertEqual(app.stop_calls, 1)
+
+
+class ShutdownTests(unittest.IsolatedAsyncioTestCase):
+    async def test_shutdown_cancels_llm_auto_apply_tasks(self) -> None:
+        qbit = FakeQbit()
+        app = FakeApplication(make_settings(), FakeBot(), qbit)
+        task = asyncio.create_task(asyncio.sleep(60))
+        app.bot_data["llm_auto_apply_tasks"] = {task}
+
+        await post_shutdown(app)
+
+        self.assertTrue(task.cancelled())
+        self.assertEqual(app.bot_data["llm_auto_apply_tasks"], set())
+        self.assertTrue(qbit.closed)

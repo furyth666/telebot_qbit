@@ -6,3 +6,6 @@ __pycache__/
 .mypy_cache/
 .deploy/
 data/
+.claude/
+.claude-octopus/
+CLAUDE.md

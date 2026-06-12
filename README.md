@@ -86,6 +86,7 @@ services:
 - `LLM_MODEL`: 分类模型，默认 `gpt-4.1-mini`
 - `LLM_MIN_CONFIDENCE`: 自动应用分类的最低置信度，默认 `0.85`
 - `LLM_REQUEST_TIMEOUT_SECONDS`: 大模型请求超时，默认 `20`
+- `LLM_AUTO_APPLY_DELAY_SECONDS`: 发送大模型推荐后等待多久再自动应用分类，默认 `30`
 - `WATCHDOG_ENABLED`: 是否启用 bot 自检，默认 `true`
 - `WATCHDOG_INTERVAL_SECONDS`: 自检间隔，默认 `300`
 - `WATCHDOG_MAX_FAILURES`: 连续失败多少次后退出并交给 Docker 重启，默认 `3`
@@ -128,6 +129,10 @@ Webhook 模式下，如果 qBittorrent 因 unRAID 自动更新短暂返回 `502`
 
 bot 支持添加链接后的后台处理，例如上传限速、分类、文件筛选、重复检查和完成提醒。
 具体行为由环境变量控制。
+- 启用 `LLM_CLASSIFY_ENABLED` 后，bot 会先发送大模型推荐分类和手动分类按钮。
+- 如果 `LLM_AUTO_APPLY_DELAY_SECONDS` 秒内没有手动选择，bot 会自动应用大模型推荐分类。
+- 如果你在倒计时内点击分类按钮，自动应用任务会跳过，以手动选择为准。
+- HTTP/PT torrent 下载链接会按新增任务 hash 和添加时间窗口定位任务，不使用 `download.php` 等 URL 文件名匹配真实种子标题。
 - 建议挂载 `data/` 目录，避免容器重建后丢失通知和处理状态
 
 ## 常见部署说明

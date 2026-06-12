@@ -7,11 +7,12 @@ from telegram.error import BadRequest
 
 from app.config import Settings
 from app.jav_patterns import DEFAULT_JAV_NAME_REGEX
-from app.jobs import (
-    _background_finalize_torrent,
+from app.category_flow import (
+    _auto_apply_llm_category_after_delay,
     _category_choice_keyboard,
     _category_choices,
 )
+from app.jobs import _background_finalize_torrent
 from app.add_links import AddContext
 from app.jellyfin_client import JellyfinItem
 from app.llm_classifier import (
@@ -146,6 +147,7 @@ class FakeApplication:
                 jellyfin_duplicate_delete_enabled=jellyfin_duplicate_delete_enabled,
                 llm_classify_enabled=llm_classify_enabled,
                 llm_api_key="llm-key" if llm_classify_enabled else "",
+                llm_auto_apply_delay_seconds=0,
             ),
             "jav_name_pattern": re.compile(DEFAULT_JAV_NAME_REGEX),
             "bot_state": BotState(),
@@ -250,7 +252,7 @@ class FinalizeTorrentTests(unittest.IsolatedAsyncioTestCase):
         qbit = FakeQbit([_torrent("The.Show.S01E01.mkv")])
 
         with patch(
-            "app.jobs.classify_torrent",
+            "app.category_flow.classify_torrent",
             return_value=LlmCategoryDecision(
                 category="TV",
                 confidence=0.92,
@@ -261,10 +263,79 @@ class FinalizeTorrentTests(unittest.IsolatedAsyncioTestCase):
 
         classifier.assert_awaited_once()
         self.assertEqual(qbit.set_categories, [("a" * 40, "TV")])
-        self.assertEqual(len(app.bot.messages), 1)
-        self.assertIn("已由大模型自动分类", app.bot.messages[0]["text"])
-        self.assertIn("分类: <code>TV</code>", app.bot.messages[0]["text"])
+        self.assertEqual(len(app.bot.messages), 2)
+        self.assertIn("大模型推荐分类", app.bot.messages[0]["text"])
+        self.assertIn("推荐: <code>TV</code>", app.bot.messages[0]["text"])
         self.assertIn("reply_markup", app.bot.messages[0])
+        self.assertIn("已按大模型推荐自动分类", app.bot.messages[1]["text"])
+        self.assertIn("分类: <code>TV</code>", app.bot.messages[1]["text"])
+
+    async def test_llm_recommendation_schedules_auto_apply_after_delay(
+        self,
+    ) -> None:
+        app = FakeApplication(llm_classify_enabled=True)
+        app.bot_data["settings"] = Settings(
+            telegram_bot_token="token",
+            telegram_allowed_user_ids=[1],
+            qbit_base_url="http://qbit",
+            qbit_username="user",
+            qbit_password="pass",
+            llm_classify_enabled=True,
+            llm_api_key="llm-key",
+            llm_auto_apply_delay_seconds=30,
+        )
+        qbit = FakeQbit([_torrent("The.Show.S01E01.mkv")])
+
+        with patch("app.category_flow.classify_torrent", return_value=LlmCategoryDecision(
+            category="TV",
+            confidence=0.92,
+            reason="episode naming",
+        )) as classifier:
+            await _background_finalize_torrent(app, qbit, _add_context(), chat_id=1)
+
+        classifier.assert_awaited_once()
+        self.assertEqual(qbit.set_categories, [])
+        self.assertEqual(len(app.bot.messages), 1)
+        self.assertIn("大模型推荐分类", app.bot.messages[0]["text"])
+        self.assertIn("请在 <code>30</code> 秒内手动选择", app.bot.messages[0]["text"])
+        self.assertIn("llm_auto_apply_tasks", app.bot_data)
+
+    async def test_llm_auto_apply_skips_when_manual_choice_was_made(self) -> None:
+        app = FakeApplication()
+        qbit = FakeQbit([_torrent("The.Show.S01E01.mkv")])
+        torrent_hash = "a" * 40
+        app.bot_data["pending_category_choices"] = {torrent_hash: ["", "AV", "JAV", "TV"]}
+        app.bot_data["pending_category_choices"].pop(torrent_hash)
+
+        await _auto_apply_llm_category_after_delay(
+            app,
+            qbit,
+            torrent_hash=torrent_hash,
+            torrent_name="The.Show.S01E01.mkv",
+            category="TV",
+            confidence=0.92,
+            delay_seconds=0,
+            chat_id=1,
+        )
+
+        self.assertEqual(qbit.set_categories, [])
+
+    async def test_llm_auto_apply_sets_category_when_no_manual_choice(self) -> None:
+        app = FakeApplication(llm_classify_enabled=True)
+        qbit = FakeQbit([_torrent("The.Show.S01E01.mkv")])
+
+        with patch(
+            "app.category_flow.classify_torrent",
+            return_value=LlmCategoryDecision(
+                category="TV",
+                confidence=0.92,
+                reason="episode naming",
+            ),
+        ):
+            await _background_finalize_torrent(app, qbit, _add_context(), chat_id=1)
+
+        self.assertEqual(qbit.set_categories, [("a" * 40, "TV")])
+        self.assertNotIn("a" * 40, app.bot_data["pending_category_choices"])
 
     async def test_llm_javdb_source_marker_is_ignored_before_llm_classification(
         self,
@@ -273,7 +344,7 @@ class FinalizeTorrentTests(unittest.IsolatedAsyncioTestCase):
         qbit = FakeQbit([_torrent("[JAVdb.com] IPZZ-744-C.torrent")])
 
         with patch(
-            "app.jobs.classify_torrent",
+            "app.category_flow.classify_torrent",
             return_value=LlmCategoryDecision(
                 category="JAV",
                 confidence=0.99,
@@ -284,15 +355,16 @@ class FinalizeTorrentTests(unittest.IsolatedAsyncioTestCase):
 
         classifier.assert_awaited_once()
         self.assertEqual(qbit.set_categories, [("a" * 40, "JAV")])
-        self.assertEqual(len(app.bot.messages), 1)
-        self.assertIn("分类: <code>JAV</code>", app.bot.messages[0]["text"])
+        self.assertEqual(len(app.bot.messages), 2)
+        self.assertIn("推荐: <code>JAV</code>", app.bot.messages[0]["text"])
+        self.assertIn("分类: <code>JAV</code>", app.bot.messages[1]["text"])
 
     async def test_llm_jav_decision_without_javdb_marker_keeps_jav_category(self) -> None:
         app = FakeApplication(llm_classify_enabled=True)
         qbit = FakeQbit([_torrent("JAV-release-example.mkv")])
 
         with patch(
-            "app.jobs.classify_torrent",
+            "app.category_flow.classify_torrent",
             return_value=LlmCategoryDecision(
                 category="JAV",
                 confidence=0.99,
@@ -302,15 +374,16 @@ class FinalizeTorrentTests(unittest.IsolatedAsyncioTestCase):
             await _background_finalize_torrent(app, qbit, _add_context(), chat_id=1)
 
         self.assertEqual(qbit.set_categories, [("a" * 40, "JAV")])
-        self.assertEqual(len(app.bot.messages), 1)
-        self.assertIn("分类: <code>JAV</code>", app.bot.messages[0]["text"])
+        self.assertEqual(len(app.bot.messages), 2)
+        self.assertIn("推荐: <code>JAV</code>", app.bot.messages[0]["text"])
+        self.assertIn("分类: <code>JAV</code>", app.bot.messages[1]["text"])
 
     async def test_llm_low_confidence_falls_back_to_category_prompt(self) -> None:
         app = FakeApplication(llm_classify_enabled=True)
         qbit = FakeQbit([_torrent("unclear-download")])
 
         with patch(
-            "app.jobs.classify_torrent",
+            "app.category_flow.classify_torrent",
             return_value=LlmCategoryDecision(
                 category="TV",
                 confidence=0.5,
@@ -329,7 +402,7 @@ class FinalizeTorrentTests(unittest.IsolatedAsyncioTestCase):
         qbit = FakeQbit([_torrent("movie.mkv")])
 
         with patch(
-            "app.jobs.classify_torrent",
+            "app.category_flow.classify_torrent",
             return_value=LlmCategoryDecision(
                 category="Movies",
                 confidence=0.95,
@@ -348,7 +421,7 @@ class FinalizeTorrentTests(unittest.IsolatedAsyncioTestCase):
         qbit = FakeQbit([_torrent("The.Show.S01E01.mkv")])
 
         with patch(
-            "app.jobs.classify_torrent",
+            "app.category_flow.classify_torrent",
             return_value=LlmCategoryDecision(
                 category="TV",
                 confidence=0.92,
@@ -359,5 +432,5 @@ class FinalizeTorrentTests(unittest.IsolatedAsyncioTestCase):
             await _background_finalize_torrent(app, qbit, _add_context(), chat_id=1)
 
         classifier.assert_awaited_once()
-        self.assertEqual(len(app.bot.messages), 1)
+        self.assertEqual(len(app.bot.messages), 2)
         self.assertEqual(qbit.set_categories, [("a" * 40, "TV")])

@@ -6,7 +6,10 @@ from app.jav_rules import (
     _extract_jav_code,
     _extract_jav_lookup_code,
     _is_jav_title,
+    _matches_add_context,
 )
+from app.add_links import AddContext
+from app.qbit_client import TorrentSummary
 
 
 class JavRulesTests(unittest.TestCase):
@@ -63,3 +66,41 @@ class JavRulesTests(unittest.TestCase):
         self.assertTrue(_is_jav_title("[FHD-1080] SSIS-123-C", self.pattern))
         self.assertFalse(_is_jav_title("ubuntu-24.04-live-server.iso", self.pattern))
         self.assertFalse(_is_jav_title("[FHD-1080] sample video.mp4", self.pattern))
+
+    def test_http_download_name_hint_would_not_match_tracker_title(self) -> None:
+        item = TorrentSummary(
+            name="Slayed.24.10.29.Eve.Sweet.And.Lilly.Bell.XXX.2160p",
+            hash="a" * 40,
+            category="",
+            state="downloading",
+            progress=0,
+            dlspeed=0,
+            upspeed=0,
+            eta=0,
+            size=0,
+            completion_on=0,
+            added_on=100,
+        )
+
+        self.assertFalse(
+            _matches_add_context(
+                item,
+                AddContext(
+                    known_hashes=set(),
+                    started_at=100,
+                    name_hint="download.php",
+                    is_magnet=False,
+                ),
+            )
+        )
+        self.assertTrue(
+            _matches_add_context(
+                item,
+                AddContext(
+                    known_hashes=set(),
+                    started_at=100,
+                    name_hint=None,
+                    is_magnet=False,
+                ),
+            )
+        )

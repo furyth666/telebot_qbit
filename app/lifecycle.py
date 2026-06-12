@@ -122,10 +122,12 @@ async def post_init(application: Application) -> None:
 
 async def post_shutdown(application: Application) -> None:
     add_finalize_tasks = list(application.bot_data.get("add_finalize_tasks", set()))
+    llm_auto_apply_tasks = list(application.bot_data.get("llm_auto_apply_tasks", set()))
     tasks = [
         application.bot_data.get("completion_monitor_task"),
         application.bot_data.get("watchdog_task"),
         *add_finalize_tasks,
+        *llm_auto_apply_tasks,
     ]
     for task in [item for item in tasks if item]:
         task.cancel()
@@ -134,6 +136,7 @@ async def post_shutdown(application: Application) -> None:
         except asyncio.CancelledError:
             pass
     application.bot_data.get("add_finalize_tasks", set()).clear()
+    application.bot_data.get("llm_auto_apply_tasks", set()).clear()
 
     if "state_store" in application.bot_data and "bot_state" in application.bot_data:
         await _persist_state(application)

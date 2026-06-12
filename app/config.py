@@ -57,6 +57,7 @@ class Settings:
     llm_model: str = "gpt-4.1-mini"
     llm_min_confidence: float = 0.85
     llm_request_timeout_seconds: float = 20.0
+    llm_auto_apply_delay_seconds: float = 30.0
     watchdog_enabled: bool = True
     watchdog_interval_seconds: int = 300
     watchdog_max_failures: int = 3
@@ -111,6 +112,8 @@ class Settings:
             errors.append("LLM_MIN_CONFIDENCE 必须在 0 到 1 之间")
         if self.llm_request_timeout_seconds <= 0:
             errors.append("LLM_REQUEST_TIMEOUT_SECONDS 必须大于 0")
+        if self.llm_auto_apply_delay_seconds < 0:
+            errors.append("LLM_AUTO_APPLY_DELAY_SECONDS 不能小于 0")
         if self.watchdog_interval_seconds <= 0:
             errors.append("WATCHDOG_INTERVAL_SECONDS 必须大于 0")
         if self.watchdog_max_failures <= 0:
@@ -185,6 +188,9 @@ class Settings:
             llm_min_confidence=float(os.getenv("LLM_MIN_CONFIDENCE", "0.85")),
             llm_request_timeout_seconds=float(
                 os.getenv("LLM_REQUEST_TIMEOUT_SECONDS", "20")
+            ),
+            llm_auto_apply_delay_seconds=float(
+                os.getenv("LLM_AUTO_APPLY_DELAY_SECONDS", "30")
             ),
             watchdog_enabled=_as_bool(os.getenv("WATCHDOG_ENABLED"), True),
             watchdog_interval_seconds=int(os.getenv("WATCHDOG_INTERVAL_SECONDS", "300")),
