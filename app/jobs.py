@@ -2,162 +2,97 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
-import time
-from enum import Enum
 from html import escape
 
 from telegram.constants import ParseMode
 from telegram.ext import Application
 
 from app.add_links import AddContext
-from app.category_flow import _handle_llm_category_torrent, _send_category_prompt
+from app.category_flow import handle_llm_category_torrent, send_category_prompt
 from app.config import Settings
-from app.formatters import _fmt_large_file_threshold, _short_hash
-from app.jav_rules import _extract_jav_code, _matches_add_context
+from app.formatters import format_large_file_threshold, short_hash
+from app.jav_policy import (
+    JellyfinDuplicateResult,
+    JellyfinDuplicateStatus,
+    JavFileSelectionResult,
+    apply_jav_category_policy,
+    apply_jav_file_selection,
+    handle_jellyfin_duplicate_policy,
+)
+from app.jav_rules import extract_jav_code, matches_add_context
 from app.qbit_client import QbitClient, TorrentSummary
-from app.runtime_state import _get_jav_pattern, _get_state, _persist_state
+from app.runtime_state import get_jav_pattern, get_state, persist_state, runtime_context
 
 
 _CONTEXT_POLL_ATTEMPTS = 20
 _CONTEXT_POLL_INTERVAL_SECONDS = 1
-_FILES_POLL_ATTEMPTS = 10
-_VIDEO_FILE_EXTENSIONS = (".avi", ".m2ts", ".m4v", ".mkv", ".mov", ".mp4", ".ts", ".wmv")
-_FOUR_K_PATTERN = re.compile(r"(?i)(?:^|[^a-z0-9])(?:4k|2160p|uhd)(?:$|[^a-z0-9])")
 
 
-class JavFileSelectionResult(Enum):
-    FILTERED = "filtered"
-    NO_FILTER_NEEDED = "no_filter_needed"
-    NOT_READY = "not_ready"
-
-
-def _jav_large_file_threshold_bytes(settings: Settings) -> int:
-    return int(settings.jav_large_file_threshold_gb * 1024 * 1024 * 1024)
-
-
-def _looks_like_4k(value: str) -> bool:
-    return bool(_FOUR_K_PATTERN.search(value))
-
-
-def _looks_like_video_file(value: str) -> bool:
-    lowered = value.lower()
-    return lowered.endswith(_VIDEO_FILE_EXTENSIONS)
-
-
-async def _torrent_has_4k_video(qbit: QbitClient, item: TorrentSummary) -> bool:
-    if _looks_like_4k(item.name):
-        return True
-
-    try:
-        files = await qbit.get_torrent_files(item.hash)
-    except Exception:
-        logging.exception("Failed to inspect torrent files for 4K duplicate policy")
-        return False
-
-    return any(
-        _looks_like_video_file(file.name) and _looks_like_4k(file.name)
-        for file in files
-    )
-
-
-async def _purge_expired_jellyfin_duplicate_codes(application: Application) -> None:
-    state = _get_state(application)
-    now = int(time.time())
-    active = {
-        code: expires_at
-        for code, expires_at in state.jellyfin_duplicate_codes.items()
-        if expires_at > now
-    }
-    if active != state.jellyfin_duplicate_codes:
-        state.jellyfin_duplicate_codes = active
-        await _persist_state(application)
-
-
-async def _handle_jellyfin_duplicate_for_torrent(
+async def _send_jellyfin_duplicate_message(
     application: Application,
-    qbit: QbitClient,
     item: TorrentSummary,
     *,
     chat_id: int,
-    is_magnet: bool,
-    code: str,
+    result: JellyfinDuplicateResult,
 ) -> bool:
-    settings: Settings = application.bot_data["settings"]
-    jellyfin = application.bot_data["jellyfin"]
-    if not jellyfin.enabled:
+    if result.status is JellyfinDuplicateStatus.NONE:
         return False
 
-    await _purge_expired_jellyfin_duplicate_codes(application)
-    state = _get_state(application)
-    expires_at = state.jellyfin_duplicate_codes.get(code, 0)
-    now = int(time.time())
-    if expires_at > now:
+    if result.status is JellyfinDuplicateStatus.WITHIN_GRACE:
         await application.bot.send_message(
             chat_id=chat_id,
             text=(
                 "<b>ℹ️ Jellyfin 同番号短片已存在</b>\n"
-                f"🏷️ 番号: <code>{escape(code)}</code>\n"
+                f"🏷️ 番号: <code>{escape(result.code)}</code>\n"
                 "这次添加发生在 3 小时豁免窗口内，所以不会自动删除，会保留下载。"
             ),
             parse_mode=ParseMode.HTML,
         )
         return False
 
-    jellyfin_items = await jellyfin.find_by_code(code)
-    if not jellyfin_items:
-        return False
-
-    first_item_path = jellyfin_items[0].path or jellyfin_items[0].name
-    torrent_is_4k = await _torrent_has_4k_video(qbit, item)
-    jellyfin_has_4k = any(
-        _looks_like_4k(jellyfin_item.name) or _looks_like_4k(jellyfin_item.path)
-        for jellyfin_item in jellyfin_items
-    )
-    if torrent_is_4k and not jellyfin_has_4k:
+    if result.status is JellyfinDuplicateStatus.FOUR_K_EXCEPTION:
         await application.bot.send_message(
             chat_id=chat_id,
             text=(
                 "<b>ℹ️ Jellyfin 已有同番号，但本次是 4K 版本</b>\n"
                 f"🎬 任务: <b>{escape(item.name)}</b>\n"
-                f"🏷️ 番号: <code>{escape(code)}</code>\n"
-                f"📚 Jellyfin: <code>{escape(first_item_path)}</code>\n"
+                f"🏷️ 番号: <code>{escape(result.code)}</code>\n"
+                f"📚 Jellyfin: <code>{escape(result.first_item_path)}</code>\n"
                 "库内未识别到 4K 同版本，本次会继续保留下载。"
             ),
             parse_mode=ParseMode.HTML,
         )
         return False
 
-    if not (settings.jellyfin_duplicate_delete_enabled and is_magnet):
+    if result.status is JellyfinDuplicateStatus.FOUND_KEEP:
         await application.bot.send_message(
             chat_id=chat_id,
             text=(
                 "<b>ℹ️ Jellyfin 同番号短片已存在</b>\n"
                 f"🎬 任务: <b>{escape(item.name)}</b>\n"
-                f"🏷️ 番号: <code>{escape(code)}</code>\n"
-                f"📚 Jellyfin: <code>{escape(first_item_path)}</code>\n"
+                f"🏷️ 番号: <code>{escape(result.code)}</code>\n"
+                f"📚 Jellyfin: <code>{escape(result.first_item_path)}</code>\n"
                 "当前未启用自动删除，任务会继续保留并按 JAV 处理。"
             ),
             parse_mode=ParseMode.HTML,
         )
         return False
 
-    await qbit.delete_torrent(item.hash, delete_files=False)
-    state.jellyfin_duplicate_codes[code] = now + settings.jellyfin_duplicate_grace_hours * 3600
-    state.jav_processed_hashes.add(item.hash)
-    await _persist_state(application)
-    await application.bot.send_message(
-        chat_id=chat_id,
-        text=(
-            "<b>⚠️ Jellyfin 已存在同番号短片</b>\n"
-            f"🎬 任务: <b>{escape(item.name)}</b>\n"
-            f"🏷️ 番号: <code>{escape(code)}</code>\n"
-            f"📚 Jellyfin: <code>{escape(first_item_path)}</code>\n"
-            "🗑️ 本次已自动删除 qBittorrent 任务；3 小时内如果你再次添加这个番号，bot 将保留下载，不再自动删除。"
-        ),
-        parse_mode=ParseMode.HTML,
-    )
-    return True
+    if result.status is JellyfinDuplicateStatus.DELETED:
+        await application.bot.send_message(
+            chat_id=chat_id,
+            text=(
+                "<b>⚠️ Jellyfin 已存在同番号短片</b>\n"
+                f"🎬 任务: <b>{escape(item.name)}</b>\n"
+                f"🏷️ 番号: <code>{escape(result.code)}</code>\n"
+                f"📚 Jellyfin: <code>{escape(result.first_item_path)}</code>\n"
+                "🗑️ 本次已自动删除 qBittorrent 任务；3 小时内如果你再次添加这个番号，bot 将保留下载，不再自动删除。"
+            ),
+            parse_mode=ParseMode.HTML,
+        )
+        return True
+
+    return False
 
 
 async def _find_new_torrents(
@@ -172,46 +107,13 @@ async def _find_new_torrents(
         new_torrents = [
             item
             for item in torrents
-            if _matches_add_context(item, context)
+            if matches_add_context(item, context)
         ]
         if new_torrents:
             return new_torrents
         await asyncio.sleep(interval_seconds)
 
     return []
-
-
-async def _apply_jav_file_selection(
-    application: Application,
-    qbit: QbitClient,
-    torrent_hash: str,
-) -> JavFileSelectionResult:
-    threshold = _jav_large_file_threshold_bytes(application.bot_data["settings"])
-    for _ in range(_FILES_POLL_ATTEMPTS):
-        files = await qbit.get_torrent_files(torrent_hash)
-        if not files:
-            await asyncio.sleep(1)
-            continue
-
-        large_files = [item for item in files if item.size > threshold]
-        small_files = [item for item in files if item.size <= threshold]
-        if not large_files:
-            return JavFileSelectionResult.NO_FILTER_NEEDED
-        if not small_files:
-            return JavFileSelectionResult.NO_FILTER_NEEDED
-
-        await qbit.set_file_priority(torrent_hash, [item.index for item in large_files], 1)
-        try:
-            await qbit.set_file_priority(torrent_hash, [item.index for item in small_files], 0)
-        except Exception:
-            logging.exception(
-                "Failed to skip small files after enabling large files for torrent %s",
-                torrent_hash,
-            )
-            return JavFileSelectionResult.NOT_READY
-        return JavFileSelectionResult.FILTERED
-
-    return JavFileSelectionResult.NOT_READY
 
 
 async def _handle_jav_torrent(
@@ -222,41 +124,37 @@ async def _handle_jav_torrent(
     chat_id: int,
     is_magnet: bool,
 ) -> bool:
-    settings: Settings = application.bot_data["settings"]
-    code = _extract_jav_code(item.name, _get_jav_pattern(application))
+    settings: Settings = runtime_context(application).settings
+    code = extract_jav_code(item.name, get_jav_pattern(application))
     if not code:
         return False
 
-    if await _handle_jellyfin_duplicate_for_torrent(
+    duplicate_result = await handle_jellyfin_duplicate_policy(
         application,
         qbit,
         item,
-        chat_id=chat_id,
         is_magnet=is_magnet,
         code=code,
+    )
+    if await _send_jellyfin_duplicate_message(
+        application,
+        item,
+        chat_id=chat_id,
+        result=duplicate_result,
     ):
         return True
 
-    try:
-        await qbit.create_category(settings.jav_category_name)
-    except Exception:
-        pass
-    await qbit.set_category(item.hash, settings.jav_category_name)
-    selection_result = await _apply_jav_file_selection(application, qbit, item.hash)
-
-    state = _get_state(application)
-    state.jav_processed_hashes.add(item.hash)
-    await _persist_state(application)
+    result = await apply_jav_category_policy(application, qbit, item.hash)
 
     notes = [
-        f"<b>已识别 JAV 并移动到 {escape(settings.jav_category_name)}</b>",
+        f"<b>已识别 JAV 并移动到 {escape(result.category)}</b>",
         f"📦 <b>{escape(item.name)}</b>",
         f"🏷️ 番号: <code>{escape(code)}</code>",
-        f"🔑 <code>{escape(_short_hash(item.hash))}</code>",
+        f"🔑 <code>{escape(short_hash(item.hash))}</code>",
     ]
-    if selection_result is JavFileSelectionResult.FILTERED:
-        notes.append(f"📁 已仅保留大于 {_fmt_large_file_threshold(settings)} 的文件下载，小文件已跳过。")
-    elif selection_result is JavFileSelectionResult.NOT_READY:
+    if result.selection_result is JavFileSelectionResult.FILTERED:
+        notes.append(f"📁 已仅保留大于 {format_large_file_threshold(settings)} 的文件下载，小文件已跳过。")
+    elif result.selection_result is JavFileSelectionResult.NOT_READY:
         notes.append("⚠️ 文件元数据暂未就绪，尚未完成大小筛选；可稍后发送 <code>/retryjav &lt;hash&gt;</code>。")
 
     await application.bot.send_message(
@@ -267,10 +165,11 @@ async def _handle_jav_torrent(
     return True
 
 
-async def _notify_completion_loop(application: Application) -> None:
-    settings: Settings = application.bot_data["settings"]
-    qbit: QbitClient = application.bot_data["qbit"]
-    state = _get_state(application)
+async def notify_completion_loop(application: Application) -> None:
+    context = runtime_context(application)
+    settings: Settings = context.settings
+    qbit: QbitClient = context.qbit
+    state = get_state(application)
 
     while True:
         try:
@@ -279,12 +178,12 @@ async def _notify_completion_loop(application: Application) -> None:
             stale_hashes = state.notified_completed_hashes - active_hashes
             if stale_hashes:
                 state.notified_completed_hashes.difference_update(stale_hashes)
-                await _persist_state(application)
+                await persist_state(application)
 
-            if not application.bot_data.get("completion_monitor_initialized", False):
+            if not context.completion_monitor_initialized:
                 state.notified_completed_hashes.update(item.hash for item in torrents)
-                application.bot_data["completion_monitor_initialized"] = True
-                await _persist_state(application)
+                context.completion_monitor_initialized = True
+                await persist_state(application)
                 await asyncio.sleep(30)
                 continue
 
@@ -294,7 +193,7 @@ async def _notify_completion_loop(application: Application) -> None:
                 text = (
                     "<b>✅ 种子下载完成</b>\n"
                     f"📦 <b>{escape(item.name)}</b>\n"
-                    f"🔑 <code>{_short_hash(item.hash)}</code>"
+                    f"🔑 <code>{short_hash(item.hash)}</code>"
                 )
                 for user_id in settings.telegram_allowed_user_ids:
                     await application.bot.send_message(
@@ -303,7 +202,7 @@ async def _notify_completion_loop(application: Application) -> None:
                         parse_mode=ParseMode.HTML,
                     )
                 state.notified_completed_hashes.add(item.hash)
-                await _persist_state(application)
+                await persist_state(application)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -312,7 +211,7 @@ async def _notify_completion_loop(application: Application) -> None:
         await asyncio.sleep(30)
 
 
-async def _background_finalize_torrent(
+async def background_finalize_torrent(
     application: Application,
     qbit: QbitClient,
     context: AddContext,
@@ -322,14 +221,14 @@ async def _background_finalize_torrent(
         new_torrents = await _find_new_torrents(qbit, context)
         if new_torrents:
             for item in new_torrents:
-                if await _handle_llm_category_torrent(
+                if await handle_llm_category_torrent(
                     application,
                     qbit,
                     item,
                     chat_id=chat_id,
                 ):
                     continue
-                await _send_category_prompt(application, qbit, item, chat_id=chat_id)
+                await send_category_prompt(application, qbit, item, chat_id=chat_id)
             return
 
         if context.name_hint:

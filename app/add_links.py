@@ -14,6 +14,7 @@ from telegram.ext import Application
 
 from app.config import Settings
 from app.qbit_client import QbitClient
+from app.runtime_state import runtime_context
 
 
 _URL_PATTERN = re.compile(r"(magnet:\?[^\s,，;；|]+|https?://[^\s,，;；|]+)", re.IGNORECASE)
@@ -64,7 +65,7 @@ def _extract_links(text: str) -> list[str]:
     return links
 
 
-def _extract_torrent_links(text: str) -> list[str]:
+def extract_torrent_links(text: str) -> list[str]:
     links = _extract_links(text)
     if not links:
         return []
@@ -139,7 +140,7 @@ async def _add_torrent_url(
     url: str,
     known_hashes: set[str],
 ) -> AddTorrentResult:
-    settings: Settings = application.bot_data["settings"]
+    settings: Settings = runtime_context(application).settings
     is_magnet = url.lower().startswith("magnet:?")
     upload_limit = (
         _magnet_upload_limit_bytes(settings) if is_magnet else None
@@ -167,7 +168,7 @@ def _format_add_failure(index: int, error: Exception) -> str:
     return f"第 {index} 条: {escape(reason)}"
 
 
-async def _add_torrent_links(
+async def add_torrent_links(
     application: Application,
     qbit: QbitClient,
     links: list[str],
@@ -202,7 +203,7 @@ async def _add_torrent_links(
     )
 
 
-def _format_add_batch_reply(
+def format_add_batch_reply(
     result: AddBatchResult,
     *,
     auto_detected: bool,
@@ -247,12 +248,12 @@ async def _get_cached_known_hashes(
     application: Application,
     qbit: QbitClient,
 ) -> set[str]:
-    now = time.time()
-    cache = application.bot_data.get("known_hashes_cache")
-    if cache:
-        cached_at, cached_hashes = cache
-        if now - cached_at <= _KNOWN_HASH_CACHE_TTL_SECONDS:
-            return set(cached_hashes)
+    context = runtime_context(application)
+    cached_hashes = context.get_known_hashes_cache(
+        ttl_seconds=_KNOWN_HASH_CACHE_TTL_SECONDS,
+    )
+    if cached_hashes is not None:
+        return cached_hashes
 
     known_hashes = {item.hash for item in await qbit.list_torrents(filter_name="all")}
     _set_cached_known_hashes(application, known_hashes)
@@ -260,4 +261,4 @@ async def _get_cached_known_hashes(
 
 
 def _set_cached_known_hashes(application: Application, known_hashes: set[str]) -> None:
-    application.bot_data["known_hashes_cache"] = (time.time(), set(known_hashes))
+    runtime_context(application).set_known_hashes_cache(known_hashes)

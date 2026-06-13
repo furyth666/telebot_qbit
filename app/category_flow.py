@@ -2,29 +2,42 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import dataclass
 from html import escape
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.ext import Application
 
+from app.callback_data import build_category_callback
 from app.config import Settings
-from app.formatters import _short_hash
+from app.formatters import short_hash
 from app.llm_classifier import classify_torrent
 from app.qbit_client import QbitClient, TorrentCategory, TorrentSummary
+from app.runtime_state import runtime_context
 
 
 _CATEGORY_BUTTONS_PER_ROW = 2
 
 
-def _category_choice_keyboard(
+@dataclass(frozen=True)
+class ManualCategoryChoice:
+    torrent_hash: str
+    category: str
+
+    @property
+    def label(self) -> str:
+        return self.category or "未分类"
+
+
+def category_choice_keyboard(
     torrent_hash: str,
     choices: list[str],
 ) -> InlineKeyboardMarkup:
     buttons = [
         InlineKeyboardButton(
             category or "保持未分类",
-            callback_data=f"tor:cat:all:{torrent_hash}:{index}",
+            callback_data=build_category_callback(torrent_hash, index),
         )
         for index, category in enumerate(choices)
     ]
@@ -35,7 +48,7 @@ def _category_choice_keyboard(
     return InlineKeyboardMarkup(rows)
 
 
-def _category_choices(categories: list[TorrentCategory]) -> list[str]:
+def category_choices(categories: list[TorrentCategory]) -> list[str]:
     choices = [item.name for item in categories if item.name]
     return ["", *choices]
 
@@ -54,28 +67,20 @@ async def _register_category_choices(
     torrent_hash: str,
     choices: list[str],
 ) -> bool:
-    lock = application.bot_data.get("category_prompt_lock")
-    if lock is None:
-        lock = asyncio.Lock()
-        application.bot_data["category_prompt_lock"] = lock
+    context = runtime_context(application)
+    lock = context.category_prompt_lock()
 
     async with lock:
-        prompted: set[str] = application.bot_data.setdefault(
-            "prompted_category_hashes",
-            set(),
-        )
+        prompted = context.prompted_category_hashes
         if torrent_hash in prompted:
             return False
-        pending: dict[str, list[str]] = application.bot_data.setdefault(
-            "pending_category_choices",
-            {},
-        )
+        pending = context.pending_category_choices
         pending[torrent_hash] = choices
         prompted.add(torrent_hash)
         return True
 
 
-async def _send_category_prompt(
+async def send_category_prompt(
     application: Application,
     qbit: QbitClient,
     item: TorrentSummary,
@@ -83,7 +88,7 @@ async def _send_category_prompt(
     chat_id: int,
 ) -> None:
     categories = await qbit.list_categories()
-    choices = _category_choices(categories)
+    choices = category_choices(categories)
     if not await _register_category_choices(application, item.hash, choices):
         return
 
@@ -92,14 +97,14 @@ async def _send_category_prompt(
         text=(
             "<b>请选择移动到哪个分类</b>\n"
             f"📦 <b>{escape(item.name)}</b>\n"
-            f"🔑 <code>{escape(_short_hash(item.hash))}</code>"
+            f"🔑 <code>{escape(short_hash(item.hash))}</code>"
         ),
         parse_mode=ParseMode.HTML,
-        reply_markup=_category_choice_keyboard(item.hash, choices),
+        reply_markup=category_choice_keyboard(item.hash, choices),
     )
 
 
-async def _auto_apply_llm_category_after_delay(
+async def auto_apply_llm_category_after_delay(
     application: Application,
     qbit: QbitClient,
     *,
@@ -114,16 +119,11 @@ async def _auto_apply_llm_category_after_delay(
         if delay_seconds > 0:
             await asyncio.sleep(delay_seconds)
 
-        lock = application.bot_data.get("category_prompt_lock")
-        if lock is None:
-            lock = asyncio.Lock()
-            application.bot_data["category_prompt_lock"] = lock
+        context = runtime_context(application)
+        lock = context.category_prompt_lock()
 
         async with lock:
-            pending: dict[str, list[str]] = application.bot_data.get(
-                "pending_category_choices",
-                {},
-            )
+            pending = context.pending_category_choices
             if torrent_hash not in pending:
                 return
             pending.pop(torrent_hash, None)
@@ -137,7 +137,7 @@ async def _auto_apply_llm_category_after_delay(
                 f"📦 <b>{escape(torrent_name)}</b>\n"
                 f"🗂️ 分类: <code>{escape(label)}</code>\n"
                 f"置信度: <code>{confidence:.2f}</code>\n"
-                f"🔑 <code>{escape(_short_hash(torrent_hash))}</code>"
+                f"🔑 <code>{escape(short_hash(torrent_hash))}</code>"
             ),
             parse_mode=ParseMode.HTML,
         )
@@ -147,19 +147,40 @@ async def _auto_apply_llm_category_after_delay(
         logging.exception("Failed to auto-apply LLM category")
 
 
-async def _handle_llm_category_torrent(
+async def apply_manual_category_choice(
+    application: Application,
+    qbit: QbitClient,
+    *,
+    torrent_hash: str,
+    category_index: int,
+) -> ManualCategoryChoice | None:
+    context = runtime_context(application)
+    pending = context.pending_category_choices
+    choices = pending.get(torrent_hash)
+    if not choices or category_index < 0 or category_index >= len(choices):
+        return None
+
+    category = choices[category_index]
+    await qbit.set_category(torrent_hash, category)
+    pending.pop(torrent_hash, None)
+    context.prompted_category_hashes.discard(torrent_hash)
+    return ManualCategoryChoice(torrent_hash=torrent_hash, category=category)
+
+
+async def handle_llm_category_torrent(
     application: Application,
     qbit: QbitClient,
     item: TorrentSummary,
     *,
     chat_id: int,
 ) -> bool:
-    settings: Settings = application.bot_data["settings"]
+    context = runtime_context(application)
+    settings: Settings = context.settings
     if not settings.llm_classify_enabled:
         return False
 
     categories = await qbit.list_categories()
-    choices = _category_choices(categories)
+    choices = category_choices(categories)
     allowed_categories = set(choices)
     if not await _register_category_choices(application, item.hash, choices):
         return True
@@ -182,7 +203,7 @@ async def _handle_llm_category_torrent(
                 "请手动选择分类。"
             ),
             parse_mode=ParseMode.HTML,
-            reply_markup=_category_choice_keyboard(item.hash, choices),
+            reply_markup=category_choice_keyboard(item.hash, choices),
         )
         return True
 
@@ -201,7 +222,7 @@ async def _handle_llm_category_torrent(
                 "请手动选择分类。"
             ),
             parse_mode=ParseMode.HTML,
-            reply_markup=_category_choice_keyboard(item.hash, choices),
+            reply_markup=category_choice_keyboard(item.hash, choices),
         )
         return True
 
@@ -215,16 +236,16 @@ async def _handle_llm_category_torrent(
             f"🗂️ 推荐: <code>{escape(label)}</code>\n"
             f"置信度: <code>{decision.confidence:.2f}</code>\n"
             f"理由: {escape(reason)}\n"
-            f"🔑 <code>{escape(_short_hash(item.hash))}</code>\n"
+            f"🔑 <code>{escape(short_hash(item.hash))}</code>\n"
             f"请在 <code>{settings.llm_auto_apply_delay_seconds:g}</code> 秒内手动选择；"
             "超时将按推荐分类。"
         ),
         parse_mode=ParseMode.HTML,
-        reply_markup=_category_choice_keyboard(item.hash, choices),
+        reply_markup=category_choice_keyboard(item.hash, choices),
     )
 
     if settings.llm_auto_apply_delay_seconds <= 0:
-        await _auto_apply_llm_category_after_delay(
+        await auto_apply_llm_category_after_delay(
             application,
             qbit,
             torrent_hash=item.hash,
@@ -236,7 +257,7 @@ async def _handle_llm_category_torrent(
         )
     else:
         task = asyncio.create_task(
-            _auto_apply_llm_category_after_delay(
+            auto_apply_llm_category_after_delay(
                 application,
                 qbit,
                 torrent_hash=item.hash,
@@ -247,10 +268,7 @@ async def _handle_llm_category_torrent(
                 chat_id=chat_id,
             )
         )
-        tasks: set[asyncio.Task] = application.bot_data.setdefault(
-            "llm_auto_apply_tasks",
-            set(),
-        )
+        tasks = context.llm_auto_apply_tasks
         tasks.add(task)
         task.add_done_callback(tasks.discard)
     return True

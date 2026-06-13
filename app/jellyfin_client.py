@@ -4,6 +4,12 @@ from dataclasses import dataclass
 
 import httpx
 
+__all__ = [
+    "JellyfinClient",
+    "JellyfinItem",
+    "JellyfinPerson",
+]
+
 
 @dataclass(frozen=True)
 class JellyfinPerson:

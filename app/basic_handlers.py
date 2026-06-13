@@ -8,11 +8,12 @@ from telegram.constants import ParseMode
 from telegram.error import NetworkError
 from telegram.ext import ContextTypes
 
-from app.handler_utils import _require_allowed_user
+from app.handler_utils import require_allowed_user
+from app.runtime_state import runtime_context
 
 
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not await _require_allowed_user(update, context):
+    if not await require_allowed_user(update, context):
         return
     await update.message.reply_text(
         (
@@ -44,16 +45,17 @@ async def error_handler(_: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not isinstance(context.error, NetworkError):
         return
 
-    settings = context.application.bot_data["settings"]
+    runtime = runtime_context(context.application)
+    settings = runtime.settings
     now = time.monotonic()
     window_start = now - settings.telegram_network_error_window_seconds
     failures = [
         item
-        for item in context.application.bot_data.get("telegram_network_error_times", [])
+        for item in runtime.telegram_network_error_times
         if item >= window_start
     ]
     failures.append(now)
-    context.application.bot_data["telegram_network_error_times"] = failures
+    runtime.telegram_network_error_times = failures
     if len(failures) >= settings.telegram_network_error_restart_threshold:
         logging.critical(
             "Telegram network error threshold reached (%s/%s seconds); requesting restart",

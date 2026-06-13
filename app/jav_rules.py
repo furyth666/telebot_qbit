@@ -25,12 +25,20 @@ _JUNK_CODE_PREFIXES = {
     "HEVC",
 }
 
+__all__ = [
+    "DEFAULT_JAV_NAME_REGEX",
+    "extract_jav_code",
+    "extract_jav_lookup_code",
+    "is_jav_title",
+    "matches_add_context",
+]
+
 
 def _normalize_name_for_match(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", value.lower())
 
 
-def _matches_add_context(item: TorrentSummary, context: AddContext) -> bool:
+def matches_add_context(item: TorrentSummary, context: AddContext) -> bool:
     if item.hash in context.known_hashes:
         return False
     if item.added_on and item.added_on < context.started_at - _CONTEXT_LOOKBACK_SECONDS:
@@ -45,8 +53,8 @@ def _matches_add_context(item: TorrentSummary, context: AddContext) -> bool:
     return normalized_hint in normalized_name or normalized_name in normalized_hint
 
 
-def _is_jav_title(name: str, pattern: re.Pattern[str]) -> bool:
-    return _extract_jav_code(name, pattern) is not None
+def is_jav_title(name: str, pattern: re.Pattern[str]) -> bool:
+    return extract_jav_code(name, pattern) is not None
 
 
 def _normalize_search_text(value: str) -> str:
@@ -97,7 +105,7 @@ def _jav_code_score(code: str) -> int:
     return 20
 
 
-def _extract_jav_code(name: str, pattern: re.Pattern[str]) -> str | None:
+def extract_jav_code(name: str, pattern: re.Pattern[str]) -> str | None:
     candidates = [
         (_jav_code_score(code), match.start(), code)
         for match in pattern.finditer(_normalize_search_text(name))
@@ -110,8 +118,8 @@ def _extract_jav_code(name: str, pattern: re.Pattern[str]) -> str | None:
     return candidates[0][2]
 
 
-def _extract_jav_lookup_code(text: str, pattern: re.Pattern[str]) -> str | None:
+def extract_jav_lookup_code(text: str, pattern: re.Pattern[str]) -> str | None:
     stripped = text.strip()
     if not stripped or len(stripped) > 80:
         return None
-    return _extract_jav_code(stripped, pattern)
+    return extract_jav_code(stripped, pattern)

@@ -11,6 +11,11 @@ import httpx
 from app.config import Settings
 from app.qbit_client import TorrentCategory, TorrentFile, TorrentSummary
 
+__all__ = [
+    "LlmCategoryDecision",
+    "classify_torrent",
+]
+
 
 _SYSTEM_PROMPT = """You classify newly added qBittorrent torrents.
 Return JSON only with category, confidence, and reason.

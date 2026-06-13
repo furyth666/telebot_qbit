@@ -31,6 +31,7 @@ from app.handlers import (
 from app.jellyfin_client import JellyfinClient
 from app.lifecycle import post_init, post_shutdown
 from app.qbit_client import QbitClient
+from app.runtime_state import runtime_context
 
 
 def _register_handlers(application: Application) -> None:
@@ -69,14 +70,15 @@ def create_application(settings: Settings) -> Application:
         .post_shutdown(post_shutdown)
         .build()
     )
-    application.bot_data["settings"] = settings
-    application.bot_data["qbit"] = QbitClient(
+    context = runtime_context(application)
+    context.settings = settings
+    context.qbit = QbitClient(
         settings.qbit_base_url,
         settings.qbit_username,
         settings.qbit_password,
         settings.qbit_api_token,
     )
-    application.bot_data["jellyfin"] = JellyfinClient(
+    context.jellyfin = JellyfinClient(
         settings.jellyfin_base_url,
         settings.jellyfin_api_key,
     )

@@ -5,6 +5,7 @@ import json
 import logging
 import sqlite3
 import time
+from contextlib import closing
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -38,7 +39,7 @@ class StateStore:
 
     def load(self) -> BotState:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self._connect() as connection:
+        with closing(self._connect()) as connection:
             self._ensure_schema(connection)
             self._migrate_legacy_json(connection)
             self._purge_expired(connection)
@@ -48,7 +49,7 @@ class StateStore:
     def save(self, state: BotState | None = None) -> None:
         current = state or self.state
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self._connect() as connection:
+        with closing(self._connect()) as connection:
             self._ensure_schema(connection)
             self._sync_state(connection, current)
             self._purge_expired(connection)

@@ -10,15 +10,16 @@ from telegram.ext import Application
 
 from app.config import Settings
 from app.jellyfin_client import JellyfinClient
-from app.jobs import _notify_completion_loop
+from app.jobs import notify_completion_loop
 from app.qbit_client import QbitClient
-from app.runtime_state import _persist_state
+from app.runtime_state import persist_state, runtime_context
 from app.state_store import StateStore
 
 
-async def _watchdog_loop(application: Application) -> None:
-    settings: Settings = application.bot_data["settings"]
-    qbit: QbitClient = application.bot_data["qbit"]
+async def watchdog_loop(application: Application) -> None:
+    context = runtime_context(application)
+    settings: Settings = context.settings
+    qbit: QbitClient = context.qbit
     telegram_failures = 0
     qbit_failures = 0
 
@@ -26,7 +27,7 @@ async def _watchdog_loop(application: Application) -> None:
         await asyncio.sleep(settings.watchdog_interval_seconds)
         try:
             await application.bot.get_me()
-            application.bot_data["telegram_network_error_times"] = []
+            context.telegram_network_error_times = []
             if telegram_failures:
                 logging.info(
                     "Telegram watchdog recovered after %s failed check(s)",
@@ -67,12 +68,13 @@ async def _watchdog_loop(application: Application) -> None:
 
 
 async def post_init(application: Application) -> None:
-    settings: Settings = application.bot_data["settings"]
-    application.bot_data["jav_name_pattern"] = re.compile(settings.jav_name_regex)
+    context = runtime_context(application)
+    settings: Settings = context.settings
+    context.jav_pattern = re.compile(settings.jav_name_regex)
     state_store = StateStore(settings.state_file_path)
     state = state_store.load()
-    application.bot_data["state_store"] = state_store
-    application.bot_data["bot_state"] = state
+    context.state_store = state_store
+    context.state = state
 
     try:
         await application.bot.set_my_commands(
@@ -97,35 +99,36 @@ async def post_init(application: Application) -> None:
     except TelegramError:
         logging.exception("Telegram rejected command setup; continuing startup")
 
-    qbit: QbitClient = application.bot_data["qbit"]
+    qbit: QbitClient = context.qbit
     try:
         existing = await qbit.list_torrents(filter_name="completed")
     except Exception:
         logging.exception(
             "Failed to initialize qBittorrent completion baseline; will retry in background"
         )
-        application.bot_data["completion_monitor_initialized"] = False
+        context.completion_monitor_initialized = False
     else:
         state.notified_completed_hashes.update(
             item.hash for item in existing
         )
-        application.bot_data["completion_monitor_initialized"] = True
-        await _persist_state(application)
-    application.bot_data["completion_monitor_task"] = asyncio.create_task(
-        _notify_completion_loop(application)
+        context.completion_monitor_initialized = True
+        await persist_state(application)
+    context.completion_monitor_task = asyncio.create_task(
+        notify_completion_loop(application)
     )
     if settings.watchdog_enabled:
-        application.bot_data["watchdog_task"] = asyncio.create_task(
-            _watchdog_loop(application)
+        context.watchdog_task = asyncio.create_task(
+            watchdog_loop(application)
         )
 
 
 async def post_shutdown(application: Application) -> None:
-    add_finalize_tasks = list(application.bot_data.get("add_finalize_tasks", set()))
-    llm_auto_apply_tasks = list(application.bot_data.get("llm_auto_apply_tasks", set()))
+    context = runtime_context(application)
+    add_finalize_tasks = list(context.add_finalize_tasks)
+    llm_auto_apply_tasks = list(context.llm_auto_apply_tasks)
     tasks = [
-        application.bot_data.get("completion_monitor_task"),
-        application.bot_data.get("watchdog_task"),
+        context.completion_monitor_task,
+        context.watchdog_task,
         *add_finalize_tasks,
         *llm_auto_apply_tasks,
     ]
@@ -135,15 +138,15 @@ async def post_shutdown(application: Application) -> None:
             await task
         except asyncio.CancelledError:
             pass
-    application.bot_data.get("add_finalize_tasks", set()).clear()
-    application.bot_data.get("llm_auto_apply_tasks", set()).clear()
+    context.add_finalize_tasks.clear()
+    context.llm_auto_apply_tasks.clear()
 
-    if "state_store" in application.bot_data and "bot_state" in application.bot_data:
-        await _persist_state(application)
+    if context.has_persistent_state:
+        await persist_state(application)
 
-    qbit: QbitClient | None = application.bot_data.get("qbit")
+    qbit: QbitClient | None = context.data.get("qbit")
     if qbit:
         await qbit.close()
-    jellyfin: JellyfinClient | None = application.bot_data.get("jellyfin")
+    jellyfin: JellyfinClient | None = context.data.get("jellyfin")
     if jellyfin:
         await jellyfin.close()

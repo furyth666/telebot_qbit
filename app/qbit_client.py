@@ -6,6 +6,14 @@ from typing import Any
 
 import httpx
 
+__all__ = [
+    "QbitClient",
+    "TorrentCategory",
+    "TorrentFile",
+    "TorrentProperties",
+    "TorrentSummary",
+]
+
 
 @dataclass
 class TorrentSummary:

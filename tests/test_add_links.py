@@ -1,6 +1,6 @@
 import unittest
 
-from app.add_links import _add_torrent_links
+from app.add_links import add_torrent_links
 from app.config import Settings
 
 
@@ -39,7 +39,7 @@ class AddLinksTests(unittest.IsolatedAsyncioTestCase):
         app = FakeApplication()
         qbit = FakeQbit()
 
-        result = await _add_torrent_links(
+        result = await add_torrent_links(
             app,
             qbit,
             ["https://tracker.example/download.php?id=123&passkey=secret"],
@@ -53,7 +53,7 @@ class AddLinksTests(unittest.IsolatedAsyncioTestCase):
         app = FakeApplication()
         qbit = FakeQbit()
 
-        result = await _add_torrent_links(
+        result = await add_torrent_links(
             app,
             qbit,
             ["magnet:?xt=urn:btih:" + "a" * 40 + "&dn=The.Show.S01E01"],

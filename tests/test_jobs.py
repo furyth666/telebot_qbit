@@ -8,11 +8,12 @@ from telegram.error import BadRequest
 from app.config import Settings
 from app.jav_patterns import DEFAULT_JAV_NAME_REGEX
 from app.category_flow import (
-    _auto_apply_llm_category_after_delay,
-    _category_choice_keyboard,
-    _category_choices,
+    apply_manual_category_choice,
+    auto_apply_llm_category_after_delay,
+    category_choice_keyboard,
+    category_choices,
 )
-from app.jobs import _background_finalize_torrent
+from app.jobs import background_finalize_torrent
 from app.add_links import AddContext
 from app.jellyfin_client import JellyfinItem
 from app.llm_classifier import (
@@ -21,6 +22,7 @@ from app.llm_classifier import (
     _strip_source_markers,
 )
 from app.qbit_client import TorrentCategory, TorrentFile, TorrentSummary
+from app.runtime_state import runtime_context
 from app.state_store import BotState
 
 
@@ -180,7 +182,7 @@ def _jellyfin_item(code: str = "SSIS-123", *, path_suffix: str = "") -> Jellyfin
 
 class CategoryPromptTests(unittest.TestCase):
     def test_category_choices_include_uncategorized_first(self) -> None:
-        choices = _category_choices(
+        choices = category_choices(
             [
                 TorrentCategory(name="AV", save_path="/downloads/av"),
                 TorrentCategory(name="JAV", save_path="/downloads/jav"),
@@ -192,7 +194,7 @@ class CategoryPromptTests(unittest.TestCase):
 
     def test_category_keyboard_uses_hash_and_index_payloads(self) -> None:
         torrent_hash = "a" * 40
-        keyboard = _category_choice_keyboard(torrent_hash, ["", "AV", "JAV", "TV"])
+        keyboard = category_choice_keyboard(torrent_hash, ["", "AV", "JAV", "TV"])
         payloads = [
             button.callback_data
             for row in keyboard.inline_keyboard
@@ -209,6 +211,46 @@ class CategoryPromptTests(unittest.TestCase):
             ],
         )
         self.assertTrue(all(len(item.encode("utf-8")) <= 64 for item in payloads))
+
+
+class ManualCategoryChoiceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_apply_manual_category_choice_sets_category_and_clears_state(self) -> None:
+        app = FakeApplication()
+        qbit = FakeQbit([_torrent("The.Show.S01E01.mkv")])
+        torrent_hash = "a" * 40
+        context = runtime_context(app)
+        context.pending_category_choices[torrent_hash] = ["", "AV", "JAV", "TV"]
+        context.prompted_category_hashes.add(torrent_hash)
+
+        choice = await apply_manual_category_choice(
+            app,
+            qbit,
+            torrent_hash=torrent_hash,
+            category_index=2,
+        )
+
+        self.assertIsNotNone(choice)
+        self.assertEqual(choice.category, "JAV")
+        self.assertEqual(choice.label, "JAV")
+        self.assertEqual(qbit.set_categories, [(torrent_hash, "JAV")])
+        self.assertNotIn(torrent_hash, context.pending_category_choices)
+        self.assertNotIn(torrent_hash, context.prompted_category_hashes)
+
+    async def test_apply_manual_category_choice_rejects_expired_index(self) -> None:
+        app = FakeApplication()
+        qbit = FakeQbit([_torrent("The.Show.S01E01.mkv")])
+        torrent_hash = "a" * 40
+        runtime_context(app).pending_category_choices[torrent_hash] = ["", "AV"]
+
+        choice = await apply_manual_category_choice(
+            app,
+            qbit,
+            torrent_hash=torrent_hash,
+            category_index=3,
+        )
+
+        self.assertIsNone(choice)
+        self.assertEqual(qbit.set_categories, [])
 
 
 class LlmClassifierTests(unittest.TestCase):
@@ -239,7 +281,7 @@ class FinalizeTorrentTests(unittest.IsolatedAsyncioTestCase):
         app = FakeApplication()
         qbit = FakeQbit([_torrent("ubuntu-24.04-live-server.iso")])
 
-        await _background_finalize_torrent(app, qbit, _add_context(), chat_id=1)
+        await background_finalize_torrent(app, qbit, _add_context(), chat_id=1)
 
         self.assertEqual(qbit.created_categories, [])
         self.assertEqual(qbit.set_categories, [])
@@ -259,7 +301,7 @@ class FinalizeTorrentTests(unittest.IsolatedAsyncioTestCase):
                 reason="episode naming",
             ),
         ) as classifier:
-            await _background_finalize_torrent(app, qbit, _add_context(), chat_id=1)
+            await background_finalize_torrent(app, qbit, _add_context(), chat_id=1)
 
         classifier.assert_awaited_once()
         self.assertEqual(qbit.set_categories, [("a" * 40, "TV")])
@@ -274,7 +316,7 @@ class FinalizeTorrentTests(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         app = FakeApplication(llm_classify_enabled=True)
-        app.bot_data["settings"] = Settings(
+        runtime_context(app).settings = Settings(
             telegram_bot_token="token",
             telegram_allowed_user_ids=[1],
             qbit_base_url="http://qbit",
@@ -291,7 +333,7 @@ class FinalizeTorrentTests(unittest.IsolatedAsyncioTestCase):
             confidence=0.92,
             reason="episode naming",
         )) as classifier:
-            await _background_finalize_torrent(app, qbit, _add_context(), chat_id=1)
+            await background_finalize_torrent(app, qbit, _add_context(), chat_id=1)
 
         classifier.assert_awaited_once()
         self.assertEqual(qbit.set_categories, [])
@@ -304,10 +346,10 @@ class FinalizeTorrentTests(unittest.IsolatedAsyncioTestCase):
         app = FakeApplication()
         qbit = FakeQbit([_torrent("The.Show.S01E01.mkv")])
         torrent_hash = "a" * 40
-        app.bot_data["pending_category_choices"] = {torrent_hash: ["", "AV", "JAV", "TV"]}
-        app.bot_data["pending_category_choices"].pop(torrent_hash)
+        runtime_context(app).pending_category_choices[torrent_hash] = ["", "AV", "JAV", "TV"]
+        runtime_context(app).pending_category_choices.pop(torrent_hash)
 
-        await _auto_apply_llm_category_after_delay(
+        await auto_apply_llm_category_after_delay(
             app,
             qbit,
             torrent_hash=torrent_hash,
@@ -332,10 +374,10 @@ class FinalizeTorrentTests(unittest.IsolatedAsyncioTestCase):
                 reason="episode naming",
             ),
         ):
-            await _background_finalize_torrent(app, qbit, _add_context(), chat_id=1)
+            await background_finalize_torrent(app, qbit, _add_context(), chat_id=1)
 
         self.assertEqual(qbit.set_categories, [("a" * 40, "TV")])
-        self.assertNotIn("a" * 40, app.bot_data["pending_category_choices"])
+        self.assertNotIn("a" * 40, runtime_context(app).pending_category_choices)
 
     async def test_llm_javdb_source_marker_is_ignored_before_llm_classification(
         self,
@@ -351,7 +393,7 @@ class FinalizeTorrentTests(unittest.IsolatedAsyncioTestCase):
                 reason="Japanese adult product code after ignoring source marker",
             ),
         ) as classifier:
-            await _background_finalize_torrent(app, qbit, _add_context(), chat_id=1)
+            await background_finalize_torrent(app, qbit, _add_context(), chat_id=1)
 
         classifier.assert_awaited_once()
         self.assertEqual(qbit.set_categories, [("a" * 40, "JAV")])
@@ -371,7 +413,7 @@ class FinalizeTorrentTests(unittest.IsolatedAsyncioTestCase):
                 reason="belongs to standalone JAV category",
             ),
         ):
-            await _background_finalize_torrent(app, qbit, _add_context(), chat_id=1)
+            await background_finalize_torrent(app, qbit, _add_context(), chat_id=1)
 
         self.assertEqual(qbit.set_categories, [("a" * 40, "JAV")])
         self.assertEqual(len(app.bot.messages), 2)
@@ -390,7 +432,7 @@ class FinalizeTorrentTests(unittest.IsolatedAsyncioTestCase):
                 reason="unclear",
             ),
         ):
-            await _background_finalize_torrent(app, qbit, _add_context(), chat_id=1)
+            await background_finalize_torrent(app, qbit, _add_context(), chat_id=1)
 
         self.assertEqual(qbit.set_categories, [])
         self.assertEqual(len(app.bot.messages), 1)
@@ -409,7 +451,7 @@ class FinalizeTorrentTests(unittest.IsolatedAsyncioTestCase):
                 reason="movie title",
             ),
         ):
-            await _background_finalize_torrent(app, qbit, _add_context(), chat_id=1)
+            await background_finalize_torrent(app, qbit, _add_context(), chat_id=1)
 
         self.assertEqual(qbit.set_categories, [])
         self.assertEqual(len(app.bot.messages), 1)
@@ -428,8 +470,8 @@ class FinalizeTorrentTests(unittest.IsolatedAsyncioTestCase):
                 reason="episode naming",
             ),
         ) as classifier:
-            await _background_finalize_torrent(app, qbit, _add_context(), chat_id=1)
-            await _background_finalize_torrent(app, qbit, _add_context(), chat_id=1)
+            await background_finalize_torrent(app, qbit, _add_context(), chat_id=1)
+            await background_finalize_torrent(app, qbit, _add_context(), chat_id=1)
 
         classifier.assert_awaited_once()
         self.assertEqual(len(app.bot.messages), 2)

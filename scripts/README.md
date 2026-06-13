@@ -25,13 +25,19 @@ cp .deploy.dockerhub.example.env .deploy/dockerhub.env
 bash scripts/install_git_hooks.sh
 ```
 
-5. 之后也可以随时手动一键同步：
+5. 本地提交或同步前，先跑统一验证：
+
+```bash
+bash scripts/validate.sh
+```
+
+6. 之后也可以随时手动一键同步：
 
 ```bash
 bash scripts/sync_unraid.sh
 ```
 
-6. 也可以随时手动发布 Docker Hub：
+7. 也可以随时手动发布 Docker Hub：
 
 ```bash
 bash scripts/publish_dockerhub.sh
