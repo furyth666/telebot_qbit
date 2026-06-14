@@ -156,6 +156,44 @@ class JellyfinAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(items[0].actors[0].name, "Actor")
         self.assertEqual(len(items[0].actors), 1)
 
+    async def test_list_media_identity_texts_reads_names_and_paths(self) -> None:
+        seen_requests: list[httpx.Request] = []
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            seen_requests.append(request)
+            self.assertEqual(request.url.path, "/Items")
+            self.assertEqual(request.url.params["Recursive"], "true")
+            self.assertEqual(request.url.params["IncludeItemTypes"], "Movie,Episode,Video")
+            self.assertEqual(request.url.params["Limit"], "2")
+            self.assertEqual(request.url.params["Fields"], "Path")
+            return httpx.Response(
+                200,
+                json={
+                    "Items": [
+                        {"Name": "SSIS-123", "Path": "/media/SSIS-123.mkv"},
+                        {"Name": "ABP-456", "Path": "ABP-456"},
+                    ]
+                },
+                request=request,
+            )
+
+        client = JellyfinClient("http://jellyfin.local", "api-key")
+        await client._client.aclose()
+        client._client = httpx.AsyncClient(
+            base_url="http://jellyfin.local",
+            headers={"X-Emby-Token": "api-key"},
+            transport=httpx.MockTransport(handler),
+            trust_env=False,
+        )
+
+        try:
+            texts = await client.list_media_identity_texts(limit=2)
+        finally:
+            await client.close()
+
+        self.assertEqual(len(seen_requests), 1)
+        self.assertEqual(texts, ["SSIS-123", "/media/SSIS-123.mkv", "ABP-456"])
+
 
 class LlmAdapterTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
@@ -176,6 +214,43 @@ class LlmAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(decision.category, "JAV")
         self.assertFalse(RecordingAsyncClient.calls[0]["trust_env"])
         self.assertEqual(RecordingAsyncClient.posts[0][0], "/chat/completions")
+
+    async def test_llm_jav_guidance_uses_configured_regex(self) -> None:
+        settings = make_settings(
+            jav_name_regex=r"(?i)CUSTOM[-_.\s]*\d{3}",
+            llm_api_base_url="https://api.openai.com/v1",
+        )
+
+        with patch("app.llm_classifier.httpx.AsyncClient", RecordingAsyncClient):
+            await classify_torrent(
+                settings,
+                make_torrent(),
+                files=[],
+                categories=[TorrentCategory("JAV", "/downloads/jav")],
+            )
+
+        request_json = RecordingAsyncClient.posts[0][1]["json"]
+        guidance = request_json["messages"][1]["content"]
+        self.assertIn(r"(?i)CUSTOM[-_.\s]*\d{3}", guidance)
+        self.assertIn("source of truth", guidance)
+        self.assertNotIn("IPX, IPZZ, SNOS", guidance)
+
+    async def test_llm_jav_guidance_includes_jellyfin_prefixes(self) -> None:
+        settings = make_settings(llm_api_base_url="https://api.openai.com/v1")
+
+        with patch("app.llm_classifier.httpx.AsyncClient", RecordingAsyncClient):
+            await classify_torrent(
+                settings,
+                make_torrent(),
+                files=[],
+                categories=[TorrentCategory("JAV", "/downloads/jav")],
+                jav_prefixes=["SSIS", "FC2-PPV"],
+            )
+
+        request_json = RecordingAsyncClient.posts[0][1]["json"]
+        guidance = request_json["messages"][1]["content"]
+        self.assertIn("Jellyfin currently contains", guidance)
+        self.assertIn("SSIS, FC2-PPV", guidance)
 
     async def test_local_ollama_request_disables_environment_proxy(self) -> None:
         settings = make_settings(llm_api_base_url="http://127.0.0.1:11434/v1")

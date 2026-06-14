@@ -88,6 +88,32 @@ class JellyfinClient:
             for item in payload.get("Items", [])
         ]
 
+    async def list_media_identity_texts(self, *, limit: int = 300) -> list[str]:
+        if not self.enabled:
+            return []
+        response = await self._client.get(
+            "/Items",
+            params={
+                "Recursive": "true",
+                "IncludeItemTypes": "Movie,Episode,Video",
+                "Limit": str(limit),
+                "Fields": "Path",
+                "SortBy": "DateCreated",
+                "SortOrder": "Descending",
+            },
+        )
+        response.raise_for_status()
+        payload = response.json()
+        texts: list[str] = []
+        for item in payload.get("Items", []):
+            name = str(item.get("Name", "")).strip()
+            path = str(item.get("Path", "")).strip()
+            if name:
+                texts.append(name)
+            if path and path != name:
+                texts.append(path)
+        return texts
+
     async def get_primary_image_bytes(self, item_id: str, *, max_width: int = 720) -> bytes | None:
         if not self.enabled or not item_id:
             return None

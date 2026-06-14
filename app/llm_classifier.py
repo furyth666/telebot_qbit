@@ -23,15 +23,28 @@ The category must be exactly one of the provided category names.
 Use an empty string only when the torrent should remain uncategorized.
 Never invent a category."""
 
-_CATEGORY_GUIDANCE = """Local category policy:
-- Use JAV for Japanese adult releases: product-code releases, Japanese performer collections, and torrents whose file list contains Japanese product codes.
-- Japanese product codes include IPX, IPZZ, SNOS, SSIS, SNIS, PRED, MIDA, and similar code-style filenames.
-- Use JAV for Japanese performer collection names such as Mikami Yua / Yua Mikami, even when the torrent name says BluRay, Collection, ISO, or AV.
+def _category_guidance(
+    settings: Settings,
+    *,
+    jav_prefixes: list[str] | None = None,
+) -> str:
+    jav_category = settings.jav_category_name.strip() or "JAV"
+    guidance = f"""Local category policy:
+- Use {jav_category} for Japanese adult releases when that category is available: product-code releases, Japanese performer collections, and torrents whose file list contains Japanese product codes.
+- The configured JAV title/product-code rule is the source of truth: {settings.jav_name_regex}
+- Treat matches to that configured rule as JAV product-code evidence; do not rely on a fixed vendor-prefix list.
+- Use {jav_category} for Japanese performer collection names such as Mikami Yua / Yua Mikami, even when the torrent name says BluRay, Collection, ISO, or AV.
 - The text AV inside a filename is not enough to choose the AV category when the release is Japanese/JAV-related.
 - Use AV for Western adult video releases, studio-title releases, and generic XXX adult videos without Japanese product-code naming or Japanese performer context.
 - Source/site markers such as JAVDB, JAVDB.com, and javdb.com are ignored before classification.
 - Use TV only for television series, anime series, episodes, seasons, or variety shows.
 - Use the category names exactly as provided."""
+    if jav_prefixes:
+        guidance += (
+            "\n- Jellyfin currently contains JAV product-code prefixes extracted "
+            f"from the media library: {', '.join(jav_prefixes)}."
+        )
+    return guidance
 
 _SOURCE_MARKER_PATTERN = re.compile(
     r"(?i)(?:[\s._\-\[\](){}]+)?javdb(?:\.com)?(?:[\s._\-\[\](){}]+)?"
@@ -114,6 +127,8 @@ async def classify_torrent(
     item: TorrentSummary,
     files: list[TorrentFile],
     categories: list[TorrentCategory],
+    *,
+    jav_prefixes: list[str] | None = None,
 ) -> LlmCategoryDecision:
     category_names = ["", *[category.name for category in categories if category.name]]
     user_payload = {
@@ -128,7 +143,7 @@ async def classify_torrent(
     }
     messages = [
         {"role": "system", "content": _SYSTEM_PROMPT},
-        {"role": "system", "content": _CATEGORY_GUIDANCE},
+        {"role": "system", "content": _category_guidance(settings, jav_prefixes=jav_prefixes)},
         {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
     ]
     native_base_url = _ollama_native_base_url(settings.llm_api_base_url)

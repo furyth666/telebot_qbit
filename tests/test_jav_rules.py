@@ -5,6 +5,7 @@ from app.jav_rules import (
     DEFAULT_JAV_NAME_REGEX,
     extract_jav_code,
     extract_jav_lookup_code,
+    extract_jav_prefixes,
     is_jav_title,
     matches_add_context,
 )
@@ -59,6 +60,20 @@ class JavRulesTests(unittest.TestCase):
     def test_lookup_rejects_long_free_text_and_non_codes(self) -> None:
         self.assertIsNone(extract_jav_lookup_code("hello world", self.pattern))
         self.assertIsNone(extract_jav_lookup_code("x" * 81 + " ABP-123", self.pattern))
+
+    def test_extracts_prefixes_from_jellyfin_texts(self) -> None:
+        prefixes = extract_jav_prefixes(
+            [
+                "/media/SSIS-123.mkv",
+                "fc2-ppv-1234567",
+                "SSIS-456",
+                "HEYZO_HD_1234",
+                "ubuntu-24.04-live-server.iso",
+            ],
+            self.pattern,
+        )
+
+        self.assertEqual(prefixes[:3], ["SSIS", "FC2-PPV", "HEYZO"])
 
     def test_is_jav_title_uses_expanded_default_pattern(self) -> None:
         self.assertTrue(is_jav_title("FC2-PPV-1234567", self.pattern))

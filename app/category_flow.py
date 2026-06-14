@@ -12,12 +12,15 @@ from telegram.ext import Application
 from app.callback_data import build_category_callback
 from app.config import Settings
 from app.formatters import short_hash
+from app.jav_rules import extract_jav_prefixes
 from app.llm_classifier import classify_torrent
 from app.qbit_client import QbitClient, TorrentCategory, TorrentSummary
 from app.runtime_state import runtime_context
 
 
 _CATEGORY_BUTTONS_PER_ROW = 2
+_JELLYFIN_PREFIX_CACHE_TTL_SECONDS = 6 * 60 * 60
+_JELLYFIN_PREFIX_SCAN_LIMIT = 300
 
 
 @dataclass(frozen=True)
@@ -60,6 +63,32 @@ def _canonical_llm_category(
     stripped = category.strip()
     by_casefold = {item.casefold(): item for item in allowed_categories}
     return by_casefold.get(stripped.casefold(), stripped)
+
+
+async def _jellyfin_jav_prefixes(application: Application) -> list[str]:
+    context = runtime_context(application)
+    cached = context.get_jellyfin_jav_prefix_cache(
+        ttl_seconds=_JELLYFIN_PREFIX_CACHE_TTL_SECONDS,
+    )
+    if cached is not None:
+        return cached
+
+    jellyfin = context.jellyfin
+    if not jellyfin.enabled:
+        context.set_jellyfin_jav_prefix_cache([])
+        return []
+
+    try:
+        texts = await jellyfin.list_media_identity_texts(
+            limit=_JELLYFIN_PREFIX_SCAN_LIMIT,
+        )
+    except Exception:
+        logging.exception("Failed to extract JAV prefixes from Jellyfin")
+        return []
+
+    prefixes = extract_jav_prefixes(texts, context.jav_pattern)
+    context.set_jellyfin_jav_prefix_cache(prefixes)
+    return prefixes
 
 
 async def _register_category_choices(
@@ -192,7 +221,13 @@ async def handle_llm_category_torrent(
         files = []
 
     try:
-        decision = await classify_torrent(settings, item, files, categories)
+        decision = await classify_torrent(
+            settings,
+            item,
+            files,
+            categories,
+            jav_prefixes=await _jellyfin_jav_prefixes(application),
+        )
     except Exception:
         logging.exception("LLM category classification failed")
         await application.bot.send_message(

@@ -70,6 +70,7 @@ class FakeJellyfin:
         self.items = items or []
         self._enabled = enabled
         self.queries: list[str] = []
+        self.identity_text_calls = 0
 
     @property
     def enabled(self) -> bool:
@@ -78,6 +79,13 @@ class FakeJellyfin:
     async def find_by_code(self, code: str) -> list[JellyfinItem]:
         self.queries.append(code)
         return self.items
+
+    async def list_media_identity_texts(self, *, limit: int = 300) -> list[str]:
+        self.identity_text_calls += 1
+        texts: list[str] = []
+        for item in self.items:
+            texts.extend([item.name, item.path])
+        return texts
 
 
 class FakeQbit:
@@ -378,6 +386,34 @@ class FinalizeTorrentTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(qbit.set_categories, [("a" * 40, "TV")])
         self.assertNotIn("a" * 40, runtime_context(app).pending_category_choices)
+
+    async def test_llm_classification_uses_jellyfin_extracted_jav_prefixes(self) -> None:
+        jellyfin = FakeJellyfin(
+            [
+                _jellyfin_item("SSIS-123"),
+                _jellyfin_item("FC2-PPV-1234567"),
+            ],
+            enabled=True,
+        )
+        app = FakeApplication(llm_classify_enabled=True, jellyfin=jellyfin)
+        qbit = FakeQbit([_torrent("new-download.mkv")])
+
+        with patch(
+            "app.category_flow.classify_torrent",
+            return_value=LlmCategoryDecision(
+                category="TV",
+                confidence=0.92,
+                reason="episode naming",
+            ),
+        ) as classifier:
+            await background_finalize_torrent(app, qbit, _add_context(), chat_id=1)
+
+        classifier.assert_awaited_once()
+        self.assertEqual(jellyfin.identity_text_calls, 1)
+        self.assertEqual(
+            classifier.await_args.kwargs["jav_prefixes"],
+            ["SSIS", "FC2-PPV"],
+        )
 
     async def test_llm_javdb_source_marker_is_ignored_before_llm_classification(
         self,

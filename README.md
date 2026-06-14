@@ -130,6 +130,7 @@ Webhook 模式下，如果 qBittorrent 因 unRAID 自动更新短暂返回 `502`
 bot 支持添加链接后的后台处理，例如上传限速、分类、文件筛选、重复检查和完成提醒。
 具体行为由环境变量控制。
 - 启用 `LLM_CLASSIFY_ENABLED` 后，bot 会先发送大模型推荐分类和手动分类按钮。
+- 如果已配置 Jellyfin，LLM 分类会从 Jellyfin 媒体名和路径提取已有 JAV 番号前缀作为动态参考。
 - 如果 `LLM_AUTO_APPLY_DELAY_SECONDS` 秒内没有手动选择，bot 会自动应用大模型推荐分类。
 - 如果你在倒计时内点击分类按钮，自动应用任务会跳过，以手动选择为准。
 - HTTP/PT torrent 下载链接会按新增任务 hash 和添加时间窗口定位任务，不使用 `download.php` 等 URL 文件名匹配真实种子标题。

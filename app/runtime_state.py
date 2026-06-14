@@ -158,6 +158,18 @@ class RuntimeContext:
     def set_known_hashes_cache(self, known_hashes: set[str]) -> None:
         self.data["known_hashes_cache"] = (time.time(), set(known_hashes))
 
+    def get_jellyfin_jav_prefix_cache(self, *, ttl_seconds: float) -> list[str] | None:
+        cache = self.data.get("jellyfin_jav_prefix_cache")
+        if not cache:
+            return None
+        cached_at, prefixes = cache
+        if time.time() - cached_at > ttl_seconds:
+            return None
+        return list(prefixes)
+
+    def set_jellyfin_jav_prefix_cache(self, prefixes: list[str]) -> None:
+        self.data["jellyfin_jav_prefix_cache"] = (time.time(), list(prefixes))
+
 
 def runtime_context(application: Application) -> RuntimeContext:
     return RuntimeContext(application)

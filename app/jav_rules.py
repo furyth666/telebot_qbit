@@ -29,6 +29,7 @@ __all__ = [
     "DEFAULT_JAV_NAME_REGEX",
     "extract_jav_code",
     "extract_jav_lookup_code",
+    "extract_jav_prefixes",
     "is_jav_title",
     "matches_add_context",
 ]
@@ -116,6 +117,37 @@ def extract_jav_code(name: str, pattern: re.Pattern[str]) -> str | None:
         return None
     candidates.sort(key=lambda item: (-item[0], item[1]))
     return candidates[0][2]
+
+
+def _jav_prefix_from_code(code: str) -> str:
+    return re.sub(r"-\d.*$", "", code).strip()
+
+
+def extract_jav_prefixes(
+    values: list[str],
+    pattern: re.Pattern[str],
+    *,
+    limit: int = 50,
+) -> list[str]:
+    counts: dict[str, int] = {}
+    first_seen: dict[str, int] = {}
+
+    for index, value in enumerate(values):
+        for match in pattern.finditer(_normalize_search_text(value)):
+            code = _normalize_extracted_jav_code(match.group(0))
+            if _jav_code_score(code) < 0:
+                continue
+            prefix = _jav_prefix_from_code(code)
+            if not prefix:
+                continue
+            counts[prefix] = counts.get(prefix, 0) + 1
+            first_seen.setdefault(prefix, index)
+
+    prefixes = sorted(
+        counts,
+        key=lambda prefix: (-counts[prefix], first_seen[prefix], prefix),
+    )
+    return prefixes[:limit]
 
 
 def extract_jav_lookup_code(text: str, pattern: re.Pattern[str]) -> str | None:
