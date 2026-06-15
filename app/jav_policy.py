@@ -7,6 +7,7 @@ import time
 from dataclasses import dataclass
 from enum import Enum
 
+import httpx
 from telegram.ext import Application
 
 from app.config import Settings
@@ -15,7 +16,6 @@ from app.qbit_client import QbitClient, TorrentSummary
 from app.runtime_state import get_state, persist_state, runtime_context
 
 
-_FILES_POLL_ATTEMPTS = 10
 _VIDEO_FILE_EXTENSIONS = (".avi", ".m2ts", ".m4v", ".mkv", ".mov", ".mp4", ".ts", ".wmv")
 _FOUR_K_PATTERN = re.compile(r"(?i)(?:^|[^a-z0-9])(?:4k|2160p|uhd)(?:$|[^a-z0-9])")
 
@@ -73,6 +73,14 @@ def _looks_like_4k(value: str) -> bool:
 
 def _looks_like_video_file(value: str) -> bool:
     return value.lower().endswith(_VIDEO_FILE_EXTENSIONS)
+
+
+def _is_category_exists_error(error: Exception) -> bool:
+    if isinstance(error, httpx.HTTPStatusError):
+        if error.response.status_code not in {400, 409}:
+            return False
+        return "exist" in error.response.text.lower()
+    return "exist" in str(error).lower()
 
 
 async def _torrent_has_4k_video(qbit: QbitClient, item: TorrentSummary) -> bool:
@@ -171,11 +179,12 @@ async def apply_jav_file_selection(
     qbit: QbitClient,
     torrent_hash: str,
 ) -> JavFileSelectionResult:
-    threshold = _jav_large_file_threshold_bytes(runtime_context(application).settings)
-    for _ in range(_FILES_POLL_ATTEMPTS):
+    settings = runtime_context(application).settings
+    threshold = _jav_large_file_threshold_bytes(settings)
+    for _ in range(settings.jav_file_poll_attempts):
         files = await qbit.get_torrent_files(torrent_hash)
         if not files:
-            await asyncio.sleep(1)
+            await asyncio.sleep(settings.jav_file_poll_interval_seconds)
             continue
 
         large_files = [item for item in files if item.size > threshold]
@@ -207,8 +216,9 @@ async def apply_jav_category_policy(
     settings = runtime_context(application).settings
     try:
         await qbit.create_category(settings.jav_category_name)
-    except Exception:
-        pass
+    except Exception as exc:
+        if not _is_category_exists_error(exc):
+            raise
     await qbit.set_category(torrent_hash, settings.jav_category_name)
     selection_result = await apply_jav_file_selection(application, qbit, torrent_hash)
 

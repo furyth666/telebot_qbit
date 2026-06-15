@@ -73,6 +73,8 @@ services:
 - `JAV_CATEGORY_NAME`: `/retryjav` 手动重试时使用的 JAV 分类名称，默认 `JAV`
 - `JAV_NAME_REGEX`: JAV 标题匹配规则
 - `JAV_LARGE_FILE_THRESHOLD_GB`: JAV 文件筛选阈值，默认 `1`
+- `JAV_FILE_POLL_ATTEMPTS`: JAV 文件元数据轮询次数，默认 `10`
+- `JAV_FILE_POLL_INTERVAL_SECONDS`: JAV 文件元数据轮询间隔秒数，默认 `1`
 - `MAGNET_UPLOAD_LIMIT_KIB`: magnet 上传限速，默认 `30`
 - `STATE_FILE_PATH`: bot 持久化 SQLite 状态库，默认 `data/bot_state.sqlite3`。旧的 `bot_state.json` 会在首次启动时自动迁移。
 - `JELLYFIN_BASE_URL`: Jellyfin API 地址，用于检查是否已有同番号短片
@@ -87,6 +89,8 @@ services:
 - `LLM_MIN_CONFIDENCE`: 自动应用分类的最低置信度，默认 `0.85`
 - `LLM_REQUEST_TIMEOUT_SECONDS`: 大模型请求超时，默认 `20`
 - `LLM_AUTO_APPLY_DELAY_SECONDS`: 发送大模型推荐后等待多久再自动应用分类，默认 `30`
+- `ADD_CONTEXT_POLL_ATTEMPTS`: 添加后定位新任务的轮询次数，默认 `20`
+- `ADD_CONTEXT_POLL_INTERVAL_SECONDS`: 添加后定位新任务的轮询间隔秒数，默认 `1`
 - `WATCHDOG_ENABLED`: 是否启用 bot 自检，默认 `true`
 - `WATCHDOG_INTERVAL_SECONDS`: 自检间隔，默认 `300`
 - `WATCHDOG_MAX_FAILURES`: 连续失败多少次后退出并交给 Docker 重启，默认 `3`

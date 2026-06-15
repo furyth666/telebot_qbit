@@ -7,14 +7,19 @@ from app.jav_patterns import DEFAULT_JAV_NAME_REGEX
 
 def _split_user_ids(raw: str) -> list[int]:
     user_ids: list[int] = []
+    seen: set[int] = set()
     for part in raw.split(","):
         item = part.strip()
         if not item:
             continue
         try:
-            user_ids.append(int(item))
+            user_id = int(item)
         except ValueError as exc:
             raise ValueError(f"TELEGRAM_ALLOWED_USER_IDS 包含无效用户 ID: {item}") from exc
+        if user_id in seen:
+            continue
+        seen.add(user_id)
+        user_ids.append(user_id)
     return user_ids
 
 
@@ -44,6 +49,8 @@ class Settings:
     jav_category_name: str = "JAV"
     jav_name_regex: str = DEFAULT_JAV_NAME_REGEX
     jav_large_file_threshold_gb: float = 1.0
+    jav_file_poll_attempts: int = 10
+    jav_file_poll_interval_seconds: float = 1.0
     magnet_upload_limit_kib: int = 30
     state_file_path: str = "data/bot_state.sqlite3"
     jellyfin_base_url: str = ""
@@ -58,6 +65,8 @@ class Settings:
     llm_min_confidence: float = 0.85
     llm_request_timeout_seconds: float = 20.0
     llm_auto_apply_delay_seconds: float = 30.0
+    add_context_poll_attempts: int = 20
+    add_context_poll_interval_seconds: float = 1.0
     watchdog_enabled: bool = True
     watchdog_interval_seconds: int = 300
     watchdog_max_failures: int = 3
@@ -98,6 +107,10 @@ class Settings:
             errors.append(f"JAV_NAME_REGEX 不是有效正则: {exc}")
         if self.jav_large_file_threshold_gb <= 0:
             errors.append("JAV_LARGE_FILE_THRESHOLD_GB 必须大于 0")
+        if self.jav_file_poll_attempts <= 0:
+            errors.append("JAV_FILE_POLL_ATTEMPTS 必须大于 0")
+        if self.jav_file_poll_interval_seconds <= 0:
+            errors.append("JAV_FILE_POLL_INTERVAL_SECONDS 必须大于 0")
         if self.magnet_upload_limit_kib < 0:
             errors.append("MAGNET_UPLOAD_LIMIT_KIB 不能小于 0")
         if self.jellyfin_duplicate_grace_hours <= 0:
@@ -114,6 +127,10 @@ class Settings:
             errors.append("LLM_REQUEST_TIMEOUT_SECONDS 必须大于 0")
         if self.llm_auto_apply_delay_seconds < 0:
             errors.append("LLM_AUTO_APPLY_DELAY_SECONDS 不能小于 0")
+        if self.add_context_poll_attempts <= 0:
+            errors.append("ADD_CONTEXT_POLL_ATTEMPTS 必须大于 0")
+        if self.add_context_poll_interval_seconds <= 0:
+            errors.append("ADD_CONTEXT_POLL_INTERVAL_SECONDS 必须大于 0")
         if self.watchdog_interval_seconds <= 0:
             errors.append("WATCHDOG_INTERVAL_SECONDS 必须大于 0")
         if self.watchdog_max_failures <= 0:
@@ -166,6 +183,10 @@ class Settings:
             jav_large_file_threshold_gb=float(
                 os.getenv("JAV_LARGE_FILE_THRESHOLD_GB", "1")
             ),
+            jav_file_poll_attempts=int(os.getenv("JAV_FILE_POLL_ATTEMPTS", "10")),
+            jav_file_poll_interval_seconds=float(
+                os.getenv("JAV_FILE_POLL_INTERVAL_SECONDS", "1")
+            ),
             magnet_upload_limit_kib=int(os.getenv("MAGNET_UPLOAD_LIMIT_KIB", "30")),
             state_file_path=os.getenv("STATE_FILE_PATH", "data/bot_state.sqlite3"),
             jellyfin_base_url=os.getenv("JELLYFIN_BASE_URL", "").rstrip("/"),
@@ -191,6 +212,10 @@ class Settings:
             ),
             llm_auto_apply_delay_seconds=float(
                 os.getenv("LLM_AUTO_APPLY_DELAY_SECONDS", "30")
+            ),
+            add_context_poll_attempts=int(os.getenv("ADD_CONTEXT_POLL_ATTEMPTS", "20")),
+            add_context_poll_interval_seconds=float(
+                os.getenv("ADD_CONTEXT_POLL_INTERVAL_SECONDS", "1")
             ),
             watchdog_enabled=_as_bool(os.getenv("WATCHDOG_ENABLED"), True),
             watchdog_interval_seconds=int(os.getenv("WATCHDOG_INTERVAL_SECONDS", "300")),

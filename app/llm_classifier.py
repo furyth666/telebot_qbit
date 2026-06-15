@@ -130,6 +130,7 @@ async def classify_torrent(
     *,
     jav_prefixes: list[str] | None = None,
 ) -> LlmCategoryDecision:
+    """Classify a torrent, propagating transport, HTTP, and JSON parse errors."""
     category_names = ["", *[category.name for category in categories if category.name]]
     user_payload = {
         "torrent": {

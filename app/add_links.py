@@ -32,6 +32,7 @@ class AddContext:
     started_at: int
     name_hint: str | None
     is_magnet: bool = False
+    expected_hashes: set[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -48,6 +49,19 @@ class AddTorrentResult:
     is_magnet: bool
     torrent_hash: str | None
     context: AddContext
+
+
+def _with_expected_hashes(
+    context: AddContext,
+    expected_hashes: set[str],
+) -> AddContext:
+    return AddContext(
+        known_hashes=set(context.known_hashes),
+        started_at=context.started_at,
+        name_hint=context.name_hint,
+        is_magnet=context.is_magnet,
+        expected_hashes=set(expected_hashes),
+    )
 
 
 def _magnet_upload_limit_bytes(settings: Settings) -> int:
@@ -195,9 +209,21 @@ async def add_torrent_links(
                 known_hashes.add(result.torrent_hash)
             else:
                 try:
-                    known_hashes = await _refresh_known_hashes(qbit)
+                    refreshed_hashes = await _refresh_known_hashes(qbit)
                 except Exception:
                     logging.exception("Failed to refresh qBittorrent hashes after add")
+                else:
+                    expected_hashes = refreshed_hashes - known_hashes
+                    if expected_hashes:
+                        result = AddTorrentResult(
+                            is_magnet=result.is_magnet,
+                            torrent_hash=result.torrent_hash,
+                            context=_with_expected_hashes(
+                                result.context,
+                                expected_hashes,
+                            ),
+                        )
+                    known_hashes = refreshed_hashes
             contexts.append(result.context)
 
         _set_cached_known_hashes(application, known_hashes)

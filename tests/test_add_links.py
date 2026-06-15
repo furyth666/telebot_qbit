@@ -116,3 +116,5 @@ class AddLinksTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(first.contexts[0].known_hashes, set())
         self.assertEqual(second.contexts[0].known_hashes, {"0" * 40})
+        self.assertEqual(first.contexts[0].expected_hashes, {"0" * 40})
+        self.assertEqual(second.contexts[0].expected_hashes, {"1" * 40})

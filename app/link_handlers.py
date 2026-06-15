@@ -135,6 +135,8 @@ async def text_link_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         code = extract_jav_lookup_code(text, get_jav_pattern(context.application))
         if code:
             await _reply_jellyfin_lookup(update, context, code)
+        else:
+            await message.reply_text("没有识别到下载链接或有效番号。")
         return
 
     result = await submit_add_links_from_text(

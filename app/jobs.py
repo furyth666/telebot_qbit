@@ -24,10 +24,6 @@ from app.qbit_client import QbitClient, TorrentSummary
 from app.runtime_state import get_jav_pattern, get_state, persist_state, runtime_context
 
 
-_CONTEXT_POLL_ATTEMPTS = 20
-_CONTEXT_POLL_INTERVAL_SECONDS = 1
-
-
 async def _send_jellyfin_duplicate_message(
     application: Application,
     item: TorrentSummary,
@@ -99,8 +95,8 @@ async def _find_new_torrents(
     qbit: QbitClient,
     context: AddContext,
     *,
-    attempts: int = _CONTEXT_POLL_ATTEMPTS,
-    interval_seconds: int = _CONTEXT_POLL_INTERVAL_SECONDS,
+    attempts: int,
+    interval_seconds: float,
 ) -> list[TorrentSummary]:
     for _ in range(attempts):
         torrents = await qbit.list_torrents(filter_name="all")
@@ -221,7 +217,13 @@ async def background_finalize_torrent(
     chat_id: int,
 ) -> None:
     try:
-        new_torrents = await _find_new_torrents(qbit, context)
+        settings: Settings = runtime_context(application).settings
+        new_torrents = await _find_new_torrents(
+            qbit,
+            context,
+            attempts=settings.add_context_poll_attempts,
+            interval_seconds=settings.add_context_poll_interval_seconds,
+        )
         if new_torrents:
             for item in new_torrents:
                 if await _handle_jav_torrent(

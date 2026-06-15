@@ -40,6 +40,8 @@ def _normalize_name_for_match(value: str) -> str:
 
 
 def matches_add_context(item: TorrentSummary, context: AddContext) -> bool:
+    if context.expected_hashes is not None:
+        return item.hash in context.expected_hashes
     if item.hash in context.known_hashes:
         return False
     if item.added_on and item.added_on < context.started_at - _CONTEXT_LOOKBACK_SECONDS:

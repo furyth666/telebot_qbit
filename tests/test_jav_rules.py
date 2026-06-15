@@ -119,3 +119,43 @@ class JavRulesTests(unittest.TestCase):
                 ),
             )
         )
+
+    def test_expected_hashes_take_precedence_for_http_add_context(self) -> None:
+        item = TorrentSummary(
+            name="Any Name",
+            hash="a" * 40,
+            category="",
+            state="downloading",
+            progress=0,
+            dlspeed=0,
+            upspeed=0,
+            eta=0,
+            size=0,
+            completion_on=0,
+            added_on=100,
+        )
+
+        self.assertTrue(
+            matches_add_context(
+                item,
+                AddContext(
+                    known_hashes=set(),
+                    started_at=100,
+                    name_hint=None,
+                    is_magnet=False,
+                    expected_hashes={"a" * 40},
+                ),
+            )
+        )
+        self.assertFalse(
+            matches_add_context(
+                item,
+                AddContext(
+                    known_hashes=set(),
+                    started_at=100,
+                    name_hint=None,
+                    is_magnet=False,
+                    expected_hashes={"b" * 40},
+                ),
+            )
+        )

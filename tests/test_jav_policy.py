@@ -190,6 +190,21 @@ class JavPolicyTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("a" * 40, runtime_context(app).state.jav_processed_hashes)
         self.assertEqual(app.state_store.save_calls, 1)
 
+    async def test_apply_jav_category_policy_raises_unexpected_create_error(self) -> None:
+        app = FakeApplication()
+        qbit = FakeQbit(
+            files=[
+                TorrentFile(index=0, name="movie.mp4", size=2 * 1024**3, priority=1),
+            ],
+            create_category_error=RuntimeError("network unavailable"),
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "network unavailable"):
+            await apply_jav_category_policy(app, qbit, "a" * 40)
+
+        self.assertEqual(qbit.set_categories, [])
+        self.assertNotIn("a" * 40, runtime_context(app).state.jav_processed_hashes)
+
     async def test_jellyfin_duplicate_policy_deletes_magnet_and_records_grace(self) -> None:
         app = FakeApplication(
             jellyfin=FakeJellyfin([_jellyfin_item()]),
