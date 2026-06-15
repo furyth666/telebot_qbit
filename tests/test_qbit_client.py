@@ -198,3 +198,29 @@ class QbitClientLoginTests(unittest.IsolatedAsyncioTestCase):
             await qbit.add_torrent_url_with_options("magnet:?xt=urn:btih:" + "a" * 40)
         finally:
             await qbit.close()
+
+    async def test_create_category_treats_409_as_already_exists(self) -> None:
+        async def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/api/v2/auth/login":
+                return httpx.Response(
+                    204,
+                    headers={"set-cookie": "SID=test"},
+                    request=request,
+                )
+            if request.url.path == "/api/v2/torrents/createCategory":
+                return httpx.Response(409, request=request)
+            return httpx.Response(404, request=request)
+
+        qbit = QbitClient("http://qbit.local", "user", "pass")
+        await qbit._client.aclose()
+        qbit._client = httpx.AsyncClient(
+            base_url="http://qbit.local",
+            transport=httpx.MockTransport(handler),
+            headers={"Referer": "http://qbit.local"},
+            trust_env=False,
+        )
+
+        try:
+            await qbit.create_category("JAV")
+        finally:
+            await qbit.close()

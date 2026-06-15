@@ -279,11 +279,16 @@ class QbitClient:
         raise RuntimeError(f"qBittorrent 添加任务返回未知结果: {body}")
 
     async def create_category(self, name: str) -> None:
-        await self._request(
-            "POST",
-            "/api/v2/torrents/createCategory",
-            data={"category": name},
-        )
+        try:
+            await self._request(
+                "POST",
+                "/api/v2/torrents/createCategory",
+                data={"category": name},
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 409:
+                return
+            raise
 
     async def set_category(self, torrent_hash: str, category: str) -> None:
         await self._request(
