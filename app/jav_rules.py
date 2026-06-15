@@ -47,7 +47,7 @@ def matches_add_context(item: TorrentSummary, context: AddContext) -> bool:
     if item.added_on and item.added_on < context.started_at - _CONTEXT_LOOKBACK_SECONDS:
         return False
     if not context.name_hint:
-        return True
+        return False
 
     normalized_hint = _normalize_name_for_match(context.name_hint)
     normalized_name = _normalize_name_for_match(item.name)

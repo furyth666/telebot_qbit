@@ -148,9 +148,9 @@ async def post_shutdown(application: Application) -> None:
     if context.has_persistent_state:
         await persist_state(application)
 
-    qbit: QbitClient | None = context.data.get("qbit")
-    if qbit:
+    if "qbit" in context.data:
+        qbit: QbitClient = context.qbit
         await qbit.close()
-    jellyfin: JellyfinClient | None = context.data.get("jellyfin")
-    if jellyfin:
+    if "jellyfin" in context.data:
+        jellyfin: JellyfinClient = context.jellyfin
         await jellyfin.close()

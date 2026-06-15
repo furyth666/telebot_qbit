@@ -58,6 +58,7 @@ class QbitClient:
         username: str,
         password: str,
         api_token: str = "",
+        timeout: float = 20.0,
     ) -> None:
         self.base_url = base_url
         self.username = username
@@ -66,7 +67,7 @@ class QbitClient:
         self._api_token_failed = False
         self._client = httpx.AsyncClient(
             base_url=base_url,
-            timeout=20.0,
+            timeout=timeout,
             headers={"Referer": base_url},
             trust_env=False,
         )
@@ -232,9 +233,6 @@ class QbitClient:
             "/api/v2/torrents/delete",
             data={"hashes": torrent_hash, "deleteFiles": str(delete_files).lower()},
         )
-
-    async def add_torrent_url(self, url: str) -> None:
-        await self.add_torrent_url_with_options(url)
 
     async def add_torrent_url_with_options(
         self,

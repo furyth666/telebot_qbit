@@ -7,6 +7,13 @@ from app.qbit_client import QbitClient
 
 
 class QbitClientLoginTests(unittest.IsolatedAsyncioTestCase):
+    async def test_client_uses_configured_timeout(self) -> None:
+        qbit = QbitClient("http://qbit.local", "user", "pass", timeout=4.5)
+        try:
+            self.assertEqual(qbit._client.timeout.connect, 4.5)
+        finally:
+            await qbit.close()
+
     async def test_concurrent_requests_share_one_login(self) -> None:
         login_calls = 0
 

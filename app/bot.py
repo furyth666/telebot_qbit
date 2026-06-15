@@ -77,10 +77,12 @@ def create_application(settings: Settings) -> Application:
         settings.qbit_username,
         settings.qbit_password,
         settings.qbit_api_token,
+        timeout=settings.qbit_request_timeout_seconds,
     )
     context.jellyfin = JellyfinClient(
         settings.jellyfin_base_url,
         settings.jellyfin_api_key,
+        timeout=settings.jellyfin_request_timeout_seconds,
     )
     _register_handlers(application)
     return application

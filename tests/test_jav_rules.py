@@ -116,6 +116,34 @@ class JavRulesTests(unittest.TestCase):
                     started_at=100,
                     name_hint=None,
                     is_magnet=False,
+                    expected_hashes={"a" * 40},
+                ),
+            )
+        )
+
+    def test_context_without_hint_or_expected_hashes_does_not_match_any_new_torrent(self) -> None:
+        item = TorrentSummary(
+            name="Any Name",
+            hash="a" * 40,
+            category="",
+            state="downloading",
+            progress=0,
+            dlspeed=0,
+            upspeed=0,
+            eta=0,
+            size=0,
+            completion_on=0,
+            added_on=100,
+        )
+
+        self.assertFalse(
+            matches_add_context(
+                item,
+                AddContext(
+                    known_hashes=set(),
+                    started_at=100,
+                    name_hint=None,
+                    is_magnet=False,
                 ),
             )
         )

@@ -36,8 +36,10 @@ class ConfigTests(unittest.TestCase):
             "QBIT_BASE_URL": "http://qbit/",
             "QBIT_USERNAME": "user",
             "QBIT_PASSWORD": "pass",
+            "QBIT_REQUEST_TIMEOUT_SECONDS": "12.5",
             "JAV_FILE_POLL_ATTEMPTS": "4",
             "JAV_FILE_POLL_INTERVAL_SECONDS": "0.25",
+            "JELLYFIN_REQUEST_TIMEOUT_SECONDS": "7.5",
             "ADD_CONTEXT_POLL_ATTEMPTS": "5",
             "ADD_CONTEXT_POLL_INTERVAL_SECONDS": "0.5",
         }
@@ -47,8 +49,10 @@ class ConfigTests(unittest.TestCase):
 
         self.assertEqual(settings.telegram_allowed_user_ids, [1, 2])
         self.assertEqual(settings.qbit_base_url, "http://qbit")
+        self.assertEqual(settings.qbit_request_timeout_seconds, 12.5)
         self.assertEqual(settings.jav_file_poll_attempts, 4)
         self.assertEqual(settings.jav_file_poll_interval_seconds, 0.25)
+        self.assertEqual(settings.jellyfin_request_timeout_seconds, 7.5)
         self.assertEqual(settings.add_context_poll_attempts, 5)
         self.assertEqual(settings.add_context_poll_interval_seconds, 0.5)
 
@@ -61,6 +65,8 @@ class ConfigTests(unittest.TestCase):
             qbit_password="pass",
             jav_file_poll_attempts=0,
             jav_file_poll_interval_seconds=0,
+            qbit_request_timeout_seconds=0,
+            jellyfin_request_timeout_seconds=0,
             add_context_poll_attempts=0,
             add_context_poll_interval_seconds=0,
         )
@@ -69,8 +75,10 @@ class ConfigTests(unittest.TestCase):
             settings.validate()
 
         message = str(caught.exception)
+        self.assertIn("QBIT_REQUEST_TIMEOUT_SECONDS 必须大于 0", message)
         self.assertIn("JAV_FILE_POLL_ATTEMPTS 必须大于 0", message)
         self.assertIn("JAV_FILE_POLL_INTERVAL_SECONDS 必须大于 0", message)
+        self.assertIn("JELLYFIN_REQUEST_TIMEOUT_SECONDS 必须大于 0", message)
         self.assertIn("ADD_CONTEXT_POLL_ATTEMPTS 必须大于 0", message)
         self.assertIn("ADD_CONTEXT_POLL_INTERVAL_SECONDS 必须大于 0", message)
 

@@ -44,6 +44,7 @@ class Settings:
     qbit_username: str
     qbit_password: str
     qbit_api_token: str = ""
+    qbit_request_timeout_seconds: float = 20.0
     telegram_mode: str = "polling"
     bot_log_level: str = "INFO"
     jav_category_name: str = "JAV"
@@ -56,6 +57,7 @@ class Settings:
     jellyfin_base_url: str = ""
     jellyfin_public_base_url: str = ""
     jellyfin_api_key: str = ""
+    jellyfin_request_timeout_seconds: float = 20.0
     jellyfin_duplicate_delete_enabled: bool = False
     jellyfin_duplicate_grace_hours: int = 3
     llm_classify_enabled: bool = False
@@ -94,6 +96,8 @@ class Settings:
             errors.append("TELEGRAM_ALLOWED_USER_IDS 至少需要配置一个用户 ID")
         if not self.qbit_base_url:
             errors.append("QBIT_BASE_URL 不能为空")
+        if self.qbit_request_timeout_seconds <= 0:
+            errors.append("QBIT_REQUEST_TIMEOUT_SECONDS 必须大于 0")
         if not self.qbit_api_token:
             if not self.qbit_username:
                 errors.append("QBIT_USERNAME 不能为空")
@@ -115,6 +119,8 @@ class Settings:
             errors.append("MAGNET_UPLOAD_LIMIT_KIB 不能小于 0")
         if self.jellyfin_duplicate_grace_hours <= 0:
             errors.append("JELLYFIN_DUPLICATE_GRACE_HOURS 必须大于 0")
+        if self.jellyfin_request_timeout_seconds <= 0:
+            errors.append("JELLYFIN_REQUEST_TIMEOUT_SECONDS 必须大于 0")
         if self.llm_classify_enabled and not self.llm_api_key.strip():
             errors.append("LLM_CLASSIFY_ENABLED=true 时必须配置 LLM_API_KEY")
         if not self.llm_api_base_url:
@@ -183,6 +189,9 @@ class Settings:
             qbit_username=os.getenv("QBIT_USERNAME", ""),
             qbit_password=os.getenv("QBIT_PASSWORD", ""),
             qbit_api_token=os.getenv("QBIT_API_TOKEN", ""),
+            qbit_request_timeout_seconds=float(
+                os.getenv("QBIT_REQUEST_TIMEOUT_SECONDS", "20")
+            ),
             bot_log_level=os.getenv("BOT_LOG_LEVEL", "INFO"),
             jav_category_name=os.getenv("JAV_CATEGORY_NAME", "JAV"),
             jav_name_regex=os.getenv("JAV_NAME_REGEX", DEFAULT_JAV_NAME_REGEX),
@@ -198,6 +207,9 @@ class Settings:
             jellyfin_base_url=os.getenv("JELLYFIN_BASE_URL", "").rstrip("/"),
             jellyfin_public_base_url=os.getenv("JELLYFIN_PUBLIC_BASE_URL", "").rstrip("/"),
             jellyfin_api_key=os.getenv("JELLYFIN_API_KEY", ""),
+            jellyfin_request_timeout_seconds=float(
+                os.getenv("JELLYFIN_REQUEST_TIMEOUT_SECONDS", "20")
+            ),
             jellyfin_duplicate_delete_enabled=_as_bool(
                 os.getenv("JELLYFIN_DUPLICATE_DELETE_ENABLED"),
                 False,

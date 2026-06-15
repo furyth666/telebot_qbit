@@ -30,12 +30,12 @@ class JellyfinItem:
 
 
 class JellyfinClient:
-    def __init__(self, base_url: str, api_key: str) -> None:
+    def __init__(self, base_url: str, api_key: str, timeout: float = 20.0) -> None:
         self.base_url = base_url
         self.api_key = api_key
         self._client = httpx.AsyncClient(
             base_url=base_url,
-            timeout=20.0,
+            timeout=timeout,
             headers={"X-Emby-Token": api_key},
             trust_env=False,
         )

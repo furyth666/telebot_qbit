@@ -34,11 +34,9 @@ class AddLinksWorkflowResult:
 
 
 def _get_finalize_semaphore(application: Application) -> asyncio.Semaphore:
-    context = runtime_context(application)
-    semaphore = context.add_finalize_semaphore
+    semaphore = runtime_context(application).add_finalize_semaphore
     if semaphore is None:
-        semaphore = asyncio.Semaphore(_MAX_BACKGROUND_FINALIZE_CONCURRENCY)
-        context.add_finalize_semaphore = semaphore
+        raise RuntimeError("Finalize semaphore is not initialized; post_init missing.")
     return semaphore
 
 

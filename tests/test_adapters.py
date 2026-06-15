@@ -107,6 +107,13 @@ class JellyfinAdapterTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await client.close()
 
+    async def test_jellyfin_client_uses_configured_timeout(self) -> None:
+        client = JellyfinClient("http://jellyfin.local", "api-key", timeout=3.5)
+        try:
+            self.assertEqual(client._client.timeout.connect, 3.5)
+        finally:
+            await client.close()
+
     async def test_find_by_code_parses_people_and_uses_api_request_shape(self) -> None:
         seen_requests: list[httpx.Request] = []
 

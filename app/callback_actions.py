@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from html import escape
 
-from telegram import InlineKeyboardMarkup
+from telegram import CallbackQuery, InlineKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.ext import Application
 
@@ -40,7 +40,7 @@ async def render_torrent_detail(
 
 async def handle_torrent_callback_action(
     application: Application,
-    query,
+    query: CallbackQuery,
     callback: TorrentCallback,
 ) -> bool:
     qbit: QbitClient = runtime_context(application).qbit

@@ -7,6 +7,14 @@ mkdir -p .deploy
 cp .deploy.example.env .deploy/unraid.env
 ```
 
+`sync_unraid.sh` 会生成使用 `network_mode: host` 的 unRAID Compose 配置，这是为了兼容
+宿主机上的 qBittorrent WebUI、Cloudflare Tunnel 和代理访问。请只在受信任的个人
+unRAID 主机上使用该脚本，并保留 `.deploy/unraid.env` 中的显式确认：
+
+```env
+UNRAID_HOST_NETWORK_ACK=I_UNDERSTAND_HOST_NETWORK_IS_INTENTIONAL
+```
+
 2. 首次配置 SSH 免密：
 
 ```bash

@@ -79,7 +79,11 @@ def _is_category_exists_error(error: Exception) -> bool:
     if isinstance(error, httpx.HTTPStatusError):
         if error.response.status_code not in {400, 409}:
             return False
-        return "exist" in error.response.text.lower()
+        try:
+            response_text = error.response.text
+        except httpx.StreamConsumed:
+            response_text = ""
+        return "exist" in response_text.lower()
     return "exist" in str(error).lower()
 
 

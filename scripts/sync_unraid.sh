@@ -27,6 +27,22 @@ UNRAID_COMPOSE_ENV_FILE="${UNRAID_COMPOSE_ENV_FILE:-$UNRAID_COMPOSE_PROJECT_DIR/
 UNRAID_HTTP_PROXY="${UNRAID_HTTP_PROXY:-}"
 UNRAID_HTTPS_PROXY="${UNRAID_HTTPS_PROXY:-}"
 UNRAID_NO_PROXY="${UNRAID_NO_PROXY:-localhost,127.0.0.1}"
+UNRAID_HOST_NETWORK_ACK="${UNRAID_HOST_NETWORK_ACK:-}"
+
+if [[ "$UNRAID_HOST_NETWORK_ACK" != "I_UNDERSTAND_HOST_NETWORK_IS_INTENTIONAL" ]]; then
+  cat >&2 <<'EOF'
+unRAID deployment uses Docker host networking intentionally.
+
+Set this in .deploy/unraid.env after reviewing the deployment notes:
+
+  UNRAID_HOST_NETWORK_ACK=I_UNDERSTAND_HOST_NETWORK_IS_INTENTIONAL
+
+Host networking is kept for unRAID compatibility with local qBittorrent,
+Cloudflare Tunnel, and host-side proxy access. Do not use this script for
+untrusted multi-tenant hosts without changing the compose network model.
+EOF
+  exit 1
+fi
 
 mkdir -p "$PROJECT_DIR/.deploy"
 

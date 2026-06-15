@@ -1,6 +1,7 @@
 import unittest
 
-from app.add_flow import submit_add_links_from_text
+from app.add_flow import finalize_added_torrents_batch, submit_add_links_from_text
+from app.add_types import AddContext
 from app.config import Settings
 from app.runtime_state import runtime_context
 
@@ -84,3 +85,22 @@ class AddFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(qbit.added_urls[0][1], 30 * 1024)
         self.assertEqual(len(app.created_tasks), 1)
         self.assertEqual(runtime_context(app).add_finalize_tasks, set(app.created_tasks))
+
+    async def test_finalize_batch_requires_initialized_semaphore(self) -> None:
+        app = FakeApplication()
+
+        with self.assertRaisesRegex(RuntimeError, "Finalize semaphore"):
+            await finalize_added_torrents_batch(
+                app,
+                FakeQbit(),
+                [
+                    AddContext(
+                        known_hashes=set(),
+                        started_at=100,
+                        name_hint=None,
+                        is_magnet=True,
+                        expected_hashes={"a" * 40},
+                    )
+                ],
+                chat_id=1,
+            )

@@ -60,6 +60,20 @@ services:
       - /mnt/user/appdata/qbit-telegram-bot/data:/app/data
 ```
 
+unRAID 部署脚本会继续生成 `network_mode: host`。这是一个有意的部署选择，用来访问
+宿主机上的 qBittorrent WebUI、Cloudflare Tunnel 和本机代理，避免 unRAID 环境中
+bridge 网络和宿主机服务寻址差异导致部署失败。它也意味着容器共享宿主机网络命名空间，
+因此只建议在受信任的个人 unRAID 主机上使用。`scripts/sync_unraid.sh` 要求
+`.deploy/unraid.env` 显式配置：
+
+```env
+UNRAID_HOST_NETWORK_ACK=I_UNDERSTAND_HOST_NETWORK_IS_INTENTIONAL
+```
+
+不要把这套 unRAID host 网络配置直接用于不受信任的多租户主机；如果要迁移到普通 Linux
+服务器，优先使用 bridge 网络并把 `QBIT_BASE_URL` 指向同一 Compose 网络中的 qBittorrent
+服务名，或明确指向宿主机局域网地址。
+
 ## 环境变量
 
 - `TELEGRAM_BOT_TOKEN`: Telegram 机器人 token
@@ -69,6 +83,7 @@ services:
 - `QBIT_USERNAME`: qBittorrent 用户名
 - `QBIT_PASSWORD`: qBittorrent 密码
 - `QBIT_API_TOKEN`: 可选，qBittorrent Bearer API token。配置后优先使用 token，失败时回退账号密码。
+- `QBIT_REQUEST_TIMEOUT_SECONDS`: qBittorrent API 请求超时，默认 `20`
 - `BOT_LOG_LEVEL`: 日志等级，默认 `INFO`
 - `JAV_CATEGORY_NAME`: `/retryjav` 手动重试时使用的 JAV 分类名称，默认 `JAV`
 - `JAV_NAME_REGEX`: JAV 标题匹配规则
@@ -80,6 +95,7 @@ services:
 - `JELLYFIN_BASE_URL`: Jellyfin API 地址，用于检查是否已有同番号短片
 - `JELLYFIN_PUBLIC_BASE_URL`: 返回给 Telegram 的 Jellyfin 内网访问地址
 - `JELLYFIN_API_KEY`: Jellyfin API Key
+- `JELLYFIN_REQUEST_TIMEOUT_SECONDS`: Jellyfin API 请求超时，默认 `20`
 - `JELLYFIN_DUPLICATE_DELETE_ENABLED`: 是否启用 Jellyfin 重复检查
 - `JELLYFIN_DUPLICATE_GRACE_HOURS`: 同番号再次添加的保留窗口，默认 `3`
 - `LLM_CLASSIFY_ENABLED`: 是否启用大模型自动分类，默认 `false`

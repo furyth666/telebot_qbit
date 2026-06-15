@@ -177,6 +177,7 @@ def _add_context() -> AddContext:
         started_at=100,
         name_hint=None,
         is_magnet=True,
+        expected_hashes={"a" * 40},
     )
 
 

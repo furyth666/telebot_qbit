@@ -19,6 +19,7 @@ from app.runtime_state import runtime_context
 
 
 _URL_PATTERN = re.compile(r"(magnet:\?[^\s,，;；|]+|https?://[^\s,，;；|]+)", re.IGNORECASE)
+_LINK_ONLY_SEPARATOR_PATTERN = re.compile(r"[\s,，;；|]+")
 _DIRECT_DOWNLOAD_HINTS = (
     ".torrent",
     "/api/rss/dlv2",
@@ -91,7 +92,7 @@ def _text_is_link_only(text: str, links: list[str]) -> bool:
     remainder = text
     for link in links:
         remainder = remainder.replace(link, " ")
-    remainder = re.sub(r"[\s,，;；|]+", "", remainder)
+    remainder = _LINK_ONLY_SEPARATOR_PATTERN.sub("", remainder)
     return not remainder
 
 
