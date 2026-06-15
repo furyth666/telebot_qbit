@@ -244,16 +244,15 @@ async def background_finalize_torrent(
                 await send_category_prompt(application, qbit, item, chat_id=chat_id)
             return
 
+        lines = ["<b>⚠️ 暂时没有定位到新任务</b>"]
         if context.name_hint:
-            await application.bot.send_message(
-                chat_id=chat_id,
-                text=(
-                    "<b>⚠️ 暂时没有定位到新任务</b>\n"
-                    f"目标: <b>{escape(context.name_hint)}</b>\n"
-                    "可以稍后在任务列表里手动调整分类。"
-                ),
-                parse_mode=ParseMode.HTML,
-            )
+            lines.append(f"目标: <b>{escape(context.name_hint)}</b>")
+        lines.append("可以稍后在任务列表里手动调整分类。")
+        await application.bot.send_message(
+            chat_id=chat_id,
+            text="\n".join(lines),
+            parse_mode=ParseMode.HTML,
+        )
     except Exception:
         logging.exception("Failed to prompt category for newly added torrent")
         await application.bot.send_message(

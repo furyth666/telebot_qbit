@@ -6,13 +6,8 @@ from dataclasses import dataclass
 
 from telegram.ext import Application
 
-from app.add_links import (
-    AddBatchResult,
-    AddContext,
-    add_torrent_links,
-    extract_torrent_links,
-    format_add_batch_reply,
-)
+from app.add_links import add_torrent_links, extract_torrent_links, format_add_batch_reply
+from app.add_types import AddBatchResult, AddContext
 from app.jobs import background_finalize_torrent
 from app.qbit_client import QbitClient
 from app.runtime_state import runtime_context
@@ -22,10 +17,13 @@ _MAX_BACKGROUND_FINALIZE_CONCURRENCY = 3
 
 __all__ = [
     "AddLinksWorkflowResult",
+    "MAX_BACKGROUND_FINALIZE_CONCURRENCY",
     "finalize_added_torrents_batch",
     "start_add_background_tasks",
     "submit_add_links_from_text",
 ]
+
+MAX_BACKGROUND_FINALIZE_CONCURRENCY = _MAX_BACKGROUND_FINALIZE_CONCURRENCY
 
 
 @dataclass(frozen=True)

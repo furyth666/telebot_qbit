@@ -170,6 +170,7 @@ class StartupTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(context.jav_pattern.search("SSIS-123"))
             self.assertIn(completed.hash, context.state.notified_completed_hashes)
             self.assertTrue(context.completion_monitor_initialized)
+            self.assertIsNotNone(context.add_finalize_semaphore)
             self.assertIsNotNone(context.completion_monitor_task)
             self.assertIsNone(context.watchdog_task)
             self.assertIsNotNone(app.bot.commands)

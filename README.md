@@ -103,10 +103,10 @@ services:
 - `TELEGRAM_NETWORK_ERROR_RESTART_THRESHOLD`: 短时间 Telegram 网络错误达到多少次后请求 Docker 重启，默认 `3`
 - `TELEGRAM_NETWORK_ERROR_WINDOW_SECONDS`: Telegram 网络错误统计窗口，默认 `180`
 - `WEBHOOK_BASE_URL`: webhook 公网 HTTPS 地址，例如 `https://qbit-bot.example.com`
-- `WEBHOOK_LISTEN_HOST`: webhook 本地监听地址，默认 `0.0.0.0`
+- `WEBHOOK_LISTEN_HOST`: webhook 本地监听地址，默认 `127.0.0.1`
 - `WEBHOOK_LISTEN_PORT`: webhook 本地监听端口，默认 `8099`
 - `WEBHOOK_PATH`: webhook 路径，建议使用随机路径
-- `WEBHOOK_SECRET_TOKEN`: Telegram webhook secret token
+- `WEBHOOK_SECRET_TOKEN`: Telegram webhook secret token，webhook 模式必填，至少 16 位
 - `WEBHOOK_BOOTSTRAP_RETRIES`: webhook 启动时注册 Telegram webhook 的重试次数，默认 `3`。失败后退出交给 Docker 重启，避免进程存活但端口未监听。
 - `HTTP_PROXY` / `HTTPS_PROXY`: 如果你的服务器访问 Telegram 需要代理，可以配置
 - `NO_PROXY`: 本地地址直连，建议包含 `127.0.0.1,localhost` 和 qBittorrent 的局域网地址

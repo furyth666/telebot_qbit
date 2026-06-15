@@ -95,6 +95,7 @@ class FakeQbit:
         *,
         files: list[TorrentFile] | None = None,
         fail_small_file_priority: bool = False,
+        lock_to_check=None,
     ) -> None:
         self.torrents = torrents
         self.created_categories: list[str] = []
@@ -104,6 +105,8 @@ class FakeQbit:
             TorrentFile(index=0, name="movie.mp4", size=2 * 1024 * 1024 * 1024, priority=1)
         ]
         self.fail_small_file_priority = fail_small_file_priority
+        self.lock_to_check = lock_to_check
+        self.lock_was_held_during_set = False
 
     async def list_torrents(self, *, filter_name: str = "all") -> list[TorrentSummary]:
         return self.torrents
@@ -119,6 +122,8 @@ class FakeQbit:
         self.created_categories.append(category)
 
     async def set_category(self, torrent_hash: str, category: str) -> None:
+        if self.lock_to_check is not None:
+            self.lock_was_held_during_set = self.lock_to_check.locked()
         self.set_categories.append((torrent_hash, category))
 
     async def delete_torrent(self, torrent_hash: str, *, delete_files: bool) -> None:
@@ -241,8 +246,30 @@ class ManualCategoryChoiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(choice.category, "JAV")
         self.assertEqual(choice.label, "JAV")
         self.assertEqual(qbit.set_categories, [(torrent_hash, "JAV")])
+        self.assertFalse(qbit.lock_was_held_during_set)
         self.assertNotIn(torrent_hash, context.pending_category_choices)
         self.assertNotIn(torrent_hash, context.prompted_category_hashes)
+
+    async def test_apply_manual_category_choice_does_not_hold_lock_during_qbit_call(self) -> None:
+        app = FakeApplication()
+        context = runtime_context(app)
+        qbit = FakeQbit(
+            [_torrent("The.Show.S01E01.mkv")],
+            lock_to_check=context.category_prompt_lock(),
+        )
+        torrent_hash = "a" * 40
+        context.pending_category_choices[torrent_hash] = ["", "AV"]
+        context.prompted_category_hashes.add(torrent_hash)
+
+        choice = await apply_manual_category_choice(
+            app,
+            qbit,
+            torrent_hash=torrent_hash,
+            category_index=1,
+        )
+
+        self.assertIsNotNone(choice)
+        self.assertFalse(qbit.lock_was_held_during_set)
 
     async def test_apply_manual_category_choice_rejects_expired_index(self) -> None:
         app = FakeApplication()
@@ -296,6 +323,35 @@ class FinalizeTorrentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(app.bot.messages), 1)
         self.assertIn("请选择移动到哪个分类", app.bot.messages[0]["text"])
         self.assertIn("reply_markup", app.bot.messages[0])
+
+    async def test_finalize_notifies_when_new_torrent_cannot_be_located_without_name_hint(self) -> None:
+        app = FakeApplication()
+        runtime_context(app).settings = Settings(
+            telegram_bot_token="token",
+            telegram_allowed_user_ids=[1],
+            qbit_base_url="http://qbit",
+            qbit_username="user",
+            qbit_password="pass",
+            add_context_poll_attempts=1,
+            add_context_poll_interval_seconds=0.001,
+        )
+        qbit = FakeQbit([])
+
+        await background_finalize_torrent(
+            app,
+            qbit,
+            AddContext(
+                known_hashes=set(),
+                started_at=100,
+                name_hint=None,
+                is_magnet=True,
+                expected_hashes={"a" * 40},
+            ),
+            chat_id=1,
+        )
+
+        self.assertEqual(len(app.bot.messages), 1)
+        self.assertIn("暂时没有定位到新任务", app.bot.messages[0]["text"])
 
     async def test_jav_torrent_uses_duplicate_policy_before_category_prompt(self) -> None:
         app = FakeApplication(
@@ -400,6 +456,7 @@ class FinalizeTorrentTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(qbit.set_categories, [("a" * 40, "TV")])
         self.assertNotIn("a" * 40, runtime_context(app).pending_category_choices)
+        self.assertNotIn("a" * 40, runtime_context(app).prompted_category_hashes)
 
     async def test_llm_classification_uses_jellyfin_extracted_jav_prefixes(self) -> None:
         jellyfin = FakeJellyfin(
@@ -509,7 +566,7 @@ class FinalizeTorrentTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("大模型没有给出可靠分类", app.bot.messages[0]["text"])
         self.assertIn("reply_markup", app.bot.messages[0])
 
-    async def test_duplicate_finalize_does_not_repeat_llm_message(self) -> None:
+    async def test_auto_applied_llm_choice_clears_prompt_state_for_future_processing(self) -> None:
         app = FakeApplication(llm_classify_enabled=True)
         qbit = FakeQbit([_torrent("The.Show.S01E01.mkv")])
 
@@ -524,6 +581,7 @@ class FinalizeTorrentTests(unittest.IsolatedAsyncioTestCase):
             await background_finalize_torrent(app, qbit, _add_context(), chat_id=1)
             await background_finalize_torrent(app, qbit, _add_context(), chat_id=1)
 
-        classifier.assert_awaited_once()
-        self.assertEqual(len(app.bot.messages), 2)
-        self.assertEqual(qbit.set_categories, [("a" * 40, "TV")])
+        self.assertEqual(classifier.await_count, 2)
+        self.assertEqual(len(app.bot.messages), 4)
+        self.assertEqual(qbit.set_categories, [("a" * 40, "TV"), ("a" * 40, "TV")])
+        self.assertNotIn("a" * 40, runtime_context(app).prompted_category_hashes)

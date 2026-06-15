@@ -73,3 +73,33 @@ class ConfigTests(unittest.TestCase):
         self.assertIn("JAV_FILE_POLL_INTERVAL_SECONDS 必须大于 0", message)
         self.assertIn("ADD_CONTEXT_POLL_ATTEMPTS 必须大于 0", message)
         self.assertIn("ADD_CONTEXT_POLL_INTERVAL_SECONDS 必须大于 0", message)
+
+    def test_webhook_mode_requires_strong_secret_token(self) -> None:
+        settings = Settings(
+            telegram_bot_token="token",
+            telegram_allowed_user_ids=[1],
+            qbit_base_url="http://qbit",
+            qbit_username="user",
+            qbit_password="pass",
+            telegram_mode="webhook",
+            webhook_base_url="https://bot.example.com",
+            webhook_path="telegram",
+            webhook_secret_token="short",
+        )
+
+        with self.assertRaises(ValueError) as caught:
+            settings.validate()
+
+        self.assertIn("WEBHOOK_SECRET_TOKEN", str(caught.exception))
+
+    def test_webhook_listen_host_defaults_to_loopback(self) -> None:
+        self.assertEqual(
+            Settings(
+                telegram_bot_token="token",
+                telegram_allowed_user_ids=[1],
+                qbit_base_url="http://qbit",
+                qbit_username="user",
+                qbit_password="pass",
+            ).webhook_listen_host,
+            "127.0.0.1",
+        )

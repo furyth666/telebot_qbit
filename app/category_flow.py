@@ -156,6 +156,7 @@ async def auto_apply_llm_category_after_delay(
             if torrent_hash not in pending:
                 return
             pending.pop(torrent_hash, None)
+            context.prompted_category_hashes.discard(torrent_hash)
 
         await qbit.set_category(torrent_hash, category)
         label = category or "未分类"
@@ -193,9 +194,9 @@ async def apply_manual_category_choice(
             return None
 
         category = choices[category_index]
-        await qbit.set_category(torrent_hash, category)
         pending.pop(torrent_hash, None)
         context.prompted_category_hashes.discard(torrent_hash)
+    await qbit.set_category(torrent_hash, category)
     return ManualCategoryChoice(torrent_hash=torrent_hash, category=category)
 
 

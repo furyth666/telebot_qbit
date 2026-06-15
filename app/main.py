@@ -6,12 +6,19 @@ from app.config import Settings
 
 
 _TELEGRAM_TOKEN_IN_URL = re.compile(r"bot\d{8,12}:AA[A-Za-z0-9_-]+")
+_BEARER_TOKEN = re.compile(r"(?i)(authorization['\"]?\s*[:=]\s*['\"]?bearer\s+)[^'\"\s,)}]+")
+_EMBY_TOKEN = re.compile(r"(?i)(x-emby-token['\"]?\s*[:=]\s*['\"]?)[^'\"\s,)}]+")
+_PASSWORD_FIELD = re.compile(r"(?i)(password['\"]?\s*[:=]\s*['\"]?)[^'\"\s,)}]+")
 
 
 class _SensitiveFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         message = super().format(record)
-        return _TELEGRAM_TOKEN_IN_URL.sub("bot<redacted>", message)
+        message = _TELEGRAM_TOKEN_IN_URL.sub("bot<redacted>", message)
+        message = _BEARER_TOKEN.sub(r"\1<redacted>", message)
+        message = _EMBY_TOKEN.sub(r"\1<redacted>", message)
+        message = _PASSWORD_FIELD.sub(r"\1<redacted>", message)
+        return message
 
 
 def _configure_logging(level: int) -> None:

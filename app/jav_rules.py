@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 import unicodedata
 
-from app.add_links import AddContext
+from app.add_types import AddContext
 from app.jav_patterns import DEFAULT_JAV_NAME_REGEX
 from app.qbit_client import TorrentSummary
 

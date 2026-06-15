@@ -98,6 +98,7 @@ class AddLinksTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.success_count, 1)
         self.assertEqual(result.contexts[0].name_hint, "The.Show.S01E01")
         self.assertTrue(result.contexts[0].is_magnet)
+        self.assertEqual(result.contexts[0].expected_hashes, {"a" * 40})
 
     async def test_http_add_refreshes_known_hash_cache_for_next_submission(self) -> None:
         app = FakeApplication()

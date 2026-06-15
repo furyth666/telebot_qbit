@@ -8,6 +8,7 @@ from telegram import BotCommand
 from telegram.error import NetworkError, TelegramError
 from telegram.ext import Application
 
+from app.add_flow import MAX_BACKGROUND_FINALIZE_CONCURRENCY
 from app.config import Settings
 from app.jellyfin_client import JellyfinClient
 from app.jobs import notify_completion_loop
@@ -71,6 +72,9 @@ async def post_init(application: Application) -> None:
     context = runtime_context(application)
     settings: Settings = context.settings
     context.jav_pattern = re.compile(settings.jav_name_regex)
+    context.add_finalize_semaphore = asyncio.Semaphore(
+        MAX_BACKGROUND_FINALIZE_CONCURRENCY
+    )
     state_store = StateStore(settings.state_file_path)
     state = state_store.load()
     context.state_store = state_store

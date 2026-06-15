@@ -79,7 +79,7 @@ class Settings:
     telegram_network_error_restart_threshold: int = 3
     telegram_network_error_window_seconds: int = 180
     webhook_base_url: str = ""
-    webhook_listen_host: str = "0.0.0.0"
+    webhook_listen_host: str = "127.0.0.1"
     webhook_listen_port: int = 8099
     webhook_path: str = ""
     webhook_secret_token: str = ""
@@ -156,6 +156,12 @@ class Settings:
                 errors.append("Webhook 模式需要配置 WEBHOOK_BASE_URL")
             if not self.webhook_path:
                 errors.append("Webhook 模式需要配置 WEBHOOK_PATH")
+            if (
+                not self.webhook_secret_token
+                or len(self.webhook_secret_token) < 16
+                or self.webhook_secret_token == "replace_with_random_secret"
+            ):
+                errors.append("Webhook 模式需要配置至少 16 位的 WEBHOOK_SECRET_TOKEN")
             if self.webhook_listen_port <= 0 or self.webhook_listen_port > 65535:
                 errors.append("WEBHOOK_LISTEN_PORT 必须在 1-65535 之间")
             if self.webhook_bootstrap_retries < 0:
@@ -245,7 +251,7 @@ class Settings:
                 os.getenv("TELEGRAM_NETWORK_ERROR_WINDOW_SECONDS", "180")
             ),
             webhook_base_url=os.getenv("WEBHOOK_BASE_URL", "").rstrip("/"),
-            webhook_listen_host=os.getenv("WEBHOOK_LISTEN_HOST", "0.0.0.0"),
+            webhook_listen_host=os.getenv("WEBHOOK_LISTEN_HOST", "127.0.0.1"),
             webhook_listen_port=int(os.getenv("WEBHOOK_LISTEN_PORT", "8099")),
             webhook_path=os.getenv("WEBHOOK_PATH", "").strip("/"),
             webhook_secret_token=os.getenv("WEBHOOK_SECRET_TOKEN", ""),

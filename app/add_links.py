@@ -12,6 +12,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 import httpx
 from telegram.ext import Application
 
+from app.add_types import AddBatchResult, AddContext
 from app.config import Settings
 from app.qbit_client import QbitClient
 from app.runtime_state import runtime_context
@@ -24,24 +25,6 @@ _DIRECT_DOWNLOAD_HINTS = (
     "download.php",
 )
 _KNOWN_HASH_CACHE_TTL_SECONDS = 10
-
-
-@dataclass(frozen=True)
-class AddContext:
-    known_hashes: set[str]
-    started_at: int
-    name_hint: str | None
-    is_magnet: bool = False
-    expected_hashes: set[str] | None = None
-
-
-@dataclass(frozen=True)
-class AddBatchResult:
-    total_links: int
-    success_count: int
-    magnet_count: int
-    contexts: list[AddContext]
-    failures: list[str]
 
 
 @dataclass(frozen=True)
@@ -207,6 +190,14 @@ async def add_torrent_links(
                 magnet_count += 1
             if result.torrent_hash:
                 known_hashes.add(result.torrent_hash)
+                result = AddTorrentResult(
+                    is_magnet=result.is_magnet,
+                    torrent_hash=result.torrent_hash,
+                    context=_with_expected_hashes(
+                        result.context,
+                        {result.torrent_hash},
+                    ),
+                )
             else:
                 try:
                     refreshed_hashes = await _refresh_known_hashes(qbit)
