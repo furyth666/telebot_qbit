@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
 
 from telegram import BotCommand
 from telegram.error import NetworkError, TelegramError
@@ -11,10 +12,75 @@ from telegram.ext import Application
 from app.add_flow import MAX_BACKGROUND_FINALIZE_CONCURRENCY
 from app.config import Settings
 from app.jellyfin_client import JellyfinClient
+from app.jav_policy import apply_jav_category_policy
+from app.jav_rules import extract_jav_code
 from app.jobs import notify_completion_loop
-from app.qbit_client import QbitClient
+from app.qbit_client import QbitClient, TorrentSummary
 from app.runtime_state import persist_state, runtime_context
 from app.state_store import StateStore
+
+
+_INCOMPLETE_JAV_RECOVERY_WINDOW_SECONDS = 24 * 60 * 60
+
+
+def _should_recover_incomplete_jav(
+    item: TorrentSummary,
+    *,
+    settings: Settings,
+    processed_hashes: set[str],
+    jav_pattern: re.Pattern[str],
+    now: int,
+) -> bool:
+    if item.hash in processed_hashes:
+        return False
+    if item.category != settings.jav_category_name:
+        return False
+    if not item.added_on:
+        return False
+    if item.added_on < now - _INCOMPLETE_JAV_RECOVERY_WINDOW_SECONDS:
+        return False
+    return extract_jav_code(item.name, jav_pattern) is not None
+
+
+async def recover_incomplete_jav_torrents(application: Application) -> None:
+    context = runtime_context(application)
+    settings = context.settings
+    qbit = context.qbit
+    state = context.state
+    try:
+        torrents = await qbit.list_torrents(filter_name="all")
+    except Exception:
+        logging.exception("Failed to inspect torrents for incomplete JAV recovery")
+        return
+
+    now = int(time.time())
+    recovered_count = 0
+    for item in torrents:
+        if not _should_recover_incomplete_jav(
+            item,
+            settings=settings,
+            processed_hashes=state.jav_processed_hashes,
+            jav_pattern=context.jav_pattern,
+            now=now,
+        ):
+            continue
+        try:
+            result = await apply_jav_category_policy(application, qbit, item.hash)
+        except Exception:
+            logging.exception(
+                "Failed to recover incomplete JAV processing for torrent %s",
+                item.hash,
+            )
+            continue
+        recovered_count += 1
+        logging.info(
+            "Recovered incomplete JAV processing for %s (%s)",
+            item.hash,
+            result.selection_result.value,
+        )
+
+    if recovered_count:
+        logging.info("Recovered %s incomplete JAV torrent(s)", recovered_count)
 
 
 async def watchdog_loop(application: Application) -> None:
@@ -117,6 +183,7 @@ async def post_init(application: Application) -> None:
         )
         context.completion_monitor_initialized = True
         await persist_state(application)
+    await recover_incomplete_jav_torrents(application)
     context.completion_monitor_task = asyncio.create_task(
         notify_completion_loop(application)
     )

@@ -1,4 +1,5 @@
 import asyncio
+import re
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -6,9 +7,15 @@ from unittest.mock import patch
 from telegram.error import NetworkError, TelegramError
 
 from app.config import Settings
-from app.lifecycle import post_init, post_shutdown, watchdog_loop
-from app.qbit_client import TorrentSummary
+from app.lifecycle import (
+    post_init,
+    post_shutdown,
+    recover_incomplete_jav_torrents,
+    watchdog_loop,
+)
+from app.qbit_client import TorrentFile, TorrentSummary
 from app.runtime_state import runtime_context
+from app.state_store import StateStore
 
 
 class FakeBot:
@@ -33,13 +40,20 @@ class FakeQbit:
         *,
         error: Exception | None = None,
         completed: list[TorrentSummary] | None = None,
+        torrents: list[TorrentSummary] | None = None,
+        files: list[TorrentFile] | None = None,
         list_error: Exception | None = None,
     ) -> None:
         self.error = error
         self.completed = completed or []
+        self.torrents = torrents or []
+        self.files = files or []
         self.list_error = list_error
         self.calls = 0
         self.closed = False
+        self.created_categories: list[str] = []
+        self.set_categories: list[tuple[str, str]] = []
+        self.file_priorities: list[tuple[str, list[int], int]] = []
 
     async def get_transfer_info(self) -> object:
         self.calls += 1
@@ -55,7 +69,26 @@ class FakeQbit:
             raise self.list_error
         if filter_name == "completed":
             return self.completed
+        if filter_name == "all":
+            return self.torrents
         return []
+
+    async def create_category(self, category: str) -> None:
+        self.created_categories.append(category)
+
+    async def set_category(self, torrent_hash: str, category: str) -> None:
+        self.set_categories.append((torrent_hash, category))
+
+    async def get_torrent_files(self, torrent_hash: str) -> list[TorrentFile]:
+        return self.files
+
+    async def set_file_priority(
+        self,
+        torrent_hash: str,
+        file_indexes: list[int],
+        priority: int,
+    ) -> None:
+        self.file_priorities.append((torrent_hash, file_indexes, priority))
 
 
 class FakeApplication:
@@ -86,11 +119,17 @@ def make_settings(**overrides) -> Settings:
     return Settings(**values)
 
 
-def make_torrent(torrent_hash: str = "a" * 40) -> TorrentSummary:
+def make_torrent(
+    torrent_hash: str = "a" * 40,
+    *,
+    name: str = "Completed Torrent",
+    category: str = "",
+    added_on: int = 50,
+) -> TorrentSummary:
     return TorrentSummary(
-        name="Completed Torrent",
+        name=name,
         hash=torrent_hash,
-        category="",
+        category=category,
         state="uploading",
         progress=1,
         dlspeed=0,
@@ -98,7 +137,7 @@ def make_torrent(torrent_hash: str = "a" * 40) -> TorrentSummary:
         eta=0,
         size=0,
         completion_on=100,
-        added_on=50,
+        added_on=added_on,
     )
 
 
@@ -154,6 +193,46 @@ class WatchdogLoopTests(unittest.IsolatedAsyncioTestCase):
 
 
 class StartupTests(unittest.IsolatedAsyncioTestCase):
+    async def test_recover_incomplete_jav_torrents_finishes_recent_jav_task(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            torrent_hash = "a" * 40
+            settings = make_settings(
+                state_file_path=f"{temp_dir}/bot_state.sqlite3",
+            )
+            qbit = FakeQbit(
+                torrents=[
+                    make_torrent(
+                        torrent_hash,
+                        name="[javdb.com]PRWF-012.torrent",
+                        category="JAV",
+                        added_on=9999999999,
+                    )
+                ],
+                files=[
+                    TorrentFile(index=0, name="movie.mp4", size=2 * 1024**3, priority=1),
+                    TorrentFile(index=1, name="sample.mp4", size=100 * 1024**2, priority=1),
+                ],
+            )
+            app = FakeApplication(settings, FakeBot(), qbit)
+            context = runtime_context(app)
+            context.jav_pattern = re.compile(settings.jav_name_regex)
+
+            state_store = StateStore(settings.state_file_path)
+            context.state_store = state_store
+            context.state = state_store.load()
+
+            await recover_incomplete_jav_torrents(app)
+
+            self.assertEqual(qbit.set_categories, [(torrent_hash, "JAV")])
+            self.assertEqual(
+                qbit.file_priorities,
+                [
+                    (torrent_hash, [0], 1),
+                    (torrent_hash, [1], 0),
+                ],
+            )
+            self.assertIn(torrent_hash, context.state.jav_processed_hashes)
+
     async def test_post_init_sets_runtime_state_and_completion_baseline(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             settings = make_settings(
