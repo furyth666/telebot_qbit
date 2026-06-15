@@ -137,3 +137,64 @@ class QbitClientLoginTests(unittest.IsolatedAsyncioTestCase):
                 )
         finally:
             await qbit.close()
+
+    async def test_add_torrent_accepts_json_success_response_body(self) -> None:
+        async def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/api/v2/auth/login":
+                return httpx.Response(
+                    204,
+                    headers={"set-cookie": "SID=test"},
+                    request=request,
+                )
+            if request.url.path == "/api/v2/torrents/add":
+                return httpx.Response(
+                    200,
+                    json={
+                        "added_torrent_ids": ["b92c008337a66291187252f70732153c979450c5"],
+                        "failure_count": 0,
+                        "pending_count": 0,
+                        "success_count": 1,
+                    },
+                    request=request,
+                )
+            return httpx.Response(404, request=request)
+
+        qbit = QbitClient("http://qbit.local", "user", "pass")
+        await qbit._client.aclose()
+        qbit._client = httpx.AsyncClient(
+            base_url="http://qbit.local",
+            transport=httpx.MockTransport(handler),
+            headers={"Referer": "http://qbit.local"},
+            trust_env=False,
+        )
+
+        try:
+            await qbit.add_torrent_url_with_options("magnet:?xt=urn:btih:" + "a" * 40)
+        finally:
+            await qbit.close()
+
+    async def test_add_torrent_treats_409_as_already_added(self) -> None:
+        async def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/api/v2/auth/login":
+                return httpx.Response(
+                    204,
+                    headers={"set-cookie": "SID=test"},
+                    request=request,
+                )
+            if request.url.path == "/api/v2/torrents/add":
+                return httpx.Response(409, text="Torrent already exists", request=request)
+            return httpx.Response(404, request=request)
+
+        qbit = QbitClient("http://qbit.local", "user", "pass")
+        await qbit._client.aclose()
+        qbit._client = httpx.AsyncClient(
+            base_url="http://qbit.local",
+            transport=httpx.MockTransport(handler),
+            headers={"Referer": "http://qbit.local"},
+            trust_env=False,
+        )
+
+        try:
+            await qbit.add_torrent_url_with_options("magnet:?xt=urn:btih:" + "a" * 40)
+        finally:
+            await qbit.close()

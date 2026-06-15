@@ -246,16 +246,37 @@ class QbitClient:
             data["upLimit"] = upload_limit
         if category:
             data["category"] = category
-        response = await self._request(
-            "POST",
-            "/api/v2/torrents/add",
-            data=data,
-        )
+        try:
+            response = await self._request(
+                "POST",
+                "/api/v2/torrents/add",
+                data=data,
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 409:
+                return
+            raise
         body = response.text.strip()
         if body == "Fails.":
             raise RuntimeError("qBittorrent 添加任务失败。")
-        if body and body != "Ok.":
+        if not body or body == "Ok.":
+            return
+        try:
+            payload = response.json()
+        except ValueError:
             raise RuntimeError(f"qBittorrent 添加任务返回未知结果: {body}")
+        if not isinstance(payload, dict):
+            raise RuntimeError(f"qBittorrent 添加任务返回未知结果: {body}")
+
+        failure_count = int(payload.get("failure_count", 0))
+        success_count = int(payload.get("success_count", 0))
+        pending_count = int(payload.get("pending_count", 0))
+        added_ids = payload.get("added_torrent_ids", [])
+        if failure_count:
+            raise RuntimeError(f"qBittorrent 添加任务失败: {body}")
+        if success_count or pending_count or added_ids:
+            return
+        raise RuntimeError(f"qBittorrent 添加任务返回未知结果: {body}")
 
     async def create_category(self, name: str) -> None:
         await self._request(
