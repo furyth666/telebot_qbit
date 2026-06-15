@@ -54,17 +54,26 @@ services:
     container_name: qbit-telegram-bot
     restart: unless-stopped
     network_mode: host
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
     env_file:
       - /mnt/user/appdata/qbit-telegram-bot/.env
     volumes:
       - /mnt/user/appdata/qbit-telegram-bot/data:/app/data
+    tmpfs:
+      - /tmp
 ```
 
 unRAID 部署脚本会继续生成 `network_mode: host`。这是一个有意的部署选择，用来访问
 宿主机上的 qBittorrent WebUI、Cloudflare Tunnel 和本机代理，避免 unRAID 环境中
 bridge 网络和宿主机服务寻址差异导致部署失败。它也意味着容器共享宿主机网络命名空间，
-因此只建议在受信任的个人 unRAID 主机上使用。`scripts/sync_unraid.sh` 要求
-`.deploy/unraid.env` 显式配置：
+因此只建议在受信任的个人 unRAID 主机上使用。为降低 root 容器配合 host 网络的风险，
+compose 配置会禁用提权、丢弃 Linux capabilities、启用只读根文件系统，并只保留
+`/app/data` 持久化写入。`scripts/sync_unraid.sh` 还要求 `.deploy/unraid.env`
+显式配置：
 
 ```env
 UNRAID_HOST_NETWORK_ACK=I_UNDERSTAND_HOST_NETWORK_IS_INTENTIONAL

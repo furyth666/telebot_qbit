@@ -86,6 +86,11 @@ services:
     container_name: qbit-telegram-bot
     restart: unless-stopped
     network_mode: host
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
     env_file:
       - ${UNRAID_COMPOSE_ENV_FILE}
     environment:
@@ -94,6 +99,8 @@ services:
       - NO_PROXY=${UNRAID_NO_PROXY}
     volumes:
       - ${UNRAID_APPDATA_DIR}/data:/app/data
+    tmpfs:
+      - /tmp
     healthcheck:
       test: ["CMD-SHELL", "test \"\$TELEGRAM_MODE\" != \"webhook\" || python -c \"import os, socket; port=int(os.environ.get('WEBHOOK_LISTEN_PORT', '8099')); s=socket.create_connection(('127.0.0.1', port), 3); s.close()\""]
       interval: 30s
