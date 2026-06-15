@@ -106,6 +106,13 @@ class RuntimeContext:
             self.data["category_prompt_lock"] = lock
         return lock
 
+    def add_submission_lock(self) -> asyncio.Lock:
+        lock = self.data.get("add_submission_lock")
+        if lock is None:
+            lock = asyncio.Lock()
+            self.data["add_submission_lock"] = lock
+        return lock
+
     @property
     def prompted_category_hashes(self) -> set[str]:
         return self.data.setdefault("prompted_category_hashes", set())

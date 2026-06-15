@@ -173,27 +173,34 @@ async def add_torrent_links(
     qbit: QbitClient,
     links: list[str],
 ) -> AddBatchResult:
-    magnet_count = 0
-    contexts: list[AddContext] = []
-    failures: list[str] = []
-    known_hashes = await _get_cached_known_hashes(application, qbit)
+    context = runtime_context(application)
+    async with context.add_submission_lock():
+        magnet_count = 0
+        contexts: list[AddContext] = []
+        failures: list[str] = []
+        known_hashes = await _get_cached_known_hashes(application, qbit)
 
-    for index, link in enumerate(links, start=1):
-        try:
-            result = await _add_torrent_url(application, qbit, link, known_hashes)
-        except Exception as exc:
-            failure = _format_add_failure(index, exc)
-            logging.warning("Failed to add torrent link: %s", failure)
-            failures.append(failure)
-            continue
+        for index, link in enumerate(links, start=1):
+            try:
+                result = await _add_torrent_url(application, qbit, link, known_hashes)
+            except Exception as exc:
+                failure = _format_add_failure(index, exc)
+                logging.warning("Failed to add torrent link: %s", failure)
+                failures.append(failure)
+                continue
 
-        if result.is_magnet:
-            magnet_count += 1
-        if result.torrent_hash:
-            known_hashes.add(result.torrent_hash)
-        contexts.append(result.context)
+            if result.is_magnet:
+                magnet_count += 1
+            if result.torrent_hash:
+                known_hashes.add(result.torrent_hash)
+            else:
+                try:
+                    known_hashes = await _refresh_known_hashes(qbit)
+                except Exception:
+                    logging.exception("Failed to refresh qBittorrent hashes after add")
+            contexts.append(result.context)
 
-    _set_cached_known_hashes(application, known_hashes)
+        _set_cached_known_hashes(application, known_hashes)
     return AddBatchResult(
         total_links=len(links),
         success_count=len(contexts),
@@ -258,6 +265,10 @@ async def _get_cached_known_hashes(
     known_hashes = {item.hash for item in await qbit.list_torrents(filter_name="all")}
     _set_cached_known_hashes(application, known_hashes)
     return known_hashes
+
+
+async def _refresh_known_hashes(qbit: QbitClient) -> set[str]:
+    return {item.hash for item in await qbit.list_torrents(filter_name="all")}
 
 
 def _set_cached_known_hashes(application: Application, known_hashes: set[str]) -> None:

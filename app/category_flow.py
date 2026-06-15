@@ -184,15 +184,18 @@ async def apply_manual_category_choice(
     category_index: int,
 ) -> ManualCategoryChoice | None:
     context = runtime_context(application)
-    pending = context.pending_category_choices
-    choices = pending.get(torrent_hash)
-    if not choices or category_index < 0 or category_index >= len(choices):
-        return None
+    lock = context.category_prompt_lock()
 
-    category = choices[category_index]
-    await qbit.set_category(torrent_hash, category)
-    pending.pop(torrent_hash, None)
-    context.prompted_category_hashes.discard(torrent_hash)
+    async with lock:
+        pending = context.pending_category_choices
+        choices = pending.get(torrent_hash)
+        if not choices or category_index < 0 or category_index >= len(choices):
+            return None
+
+        category = choices[category_index]
+        await qbit.set_category(torrent_hash, category)
+        pending.pop(torrent_hash, None)
+        context.prompted_category_hashes.discard(torrent_hash)
     return ManualCategoryChoice(torrent_hash=torrent_hash, category=category)
 
 

@@ -124,6 +124,9 @@ async def _handle_jav_torrent(
     chat_id: int,
     is_magnet: bool,
 ) -> bool:
+    if item.hash in get_state(application).jav_processed_hashes:
+        return True
+
     settings: Settings = runtime_context(application).settings
     code = extract_jav_code(item.name, get_jav_pattern(application))
     if not code:
@@ -221,6 +224,14 @@ async def background_finalize_torrent(
         new_torrents = await _find_new_torrents(qbit, context)
         if new_torrents:
             for item in new_torrents:
+                if await _handle_jav_torrent(
+                    application,
+                    qbit,
+                    item,
+                    chat_id=chat_id,
+                    is_magnet=context.is_magnet,
+                ):
+                    continue
                 if await handle_llm_category_torrent(
                     application,
                     qbit,

@@ -24,6 +24,12 @@ class RuntimeContextTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIs(context.category_prompt_lock(), context.category_prompt_lock())
 
+    async def test_add_submission_lock_is_reused(self) -> None:
+        app = FakeApplication()
+        context = runtime_context(app)
+
+        self.assertIs(context.add_submission_lock(), context.add_submission_lock())
+
     async def test_task_sets_are_stable(self) -> None:
         app = FakeApplication()
         context = runtime_context(app)

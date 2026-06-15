@@ -297,6 +297,20 @@ class FinalizeTorrentTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("请选择移动到哪个分类", app.bot.messages[0]["text"])
         self.assertIn("reply_markup", app.bot.messages[0])
 
+    async def test_jav_torrent_uses_duplicate_policy_before_category_prompt(self) -> None:
+        app = FakeApplication(
+            jellyfin=FakeJellyfin([_jellyfin_item("SSIS-123")], enabled=True),
+            jellyfin_duplicate_delete_enabled=True,
+        )
+        qbit = FakeQbit([_torrent("SSIS-123")])
+
+        await background_finalize_torrent(app, qbit, _add_context(), chat_id=1)
+
+        self.assertEqual(qbit.deleted_torrents, [("a" * 40, False)])
+        self.assertEqual(qbit.set_categories, [])
+        self.assertEqual(len(app.bot.messages), 1)
+        self.assertIn("Jellyfin 已存在同番号短片", app.bot.messages[0]["text"])
+
     async def test_llm_applies_valid_high_confidence_category(self) -> None:
         app = FakeApplication(llm_classify_enabled=True)
         qbit = FakeQbit([_torrent("The.Show.S01E01.mkv")])
@@ -431,11 +445,12 @@ class FinalizeTorrentTests(unittest.IsolatedAsyncioTestCase):
         ) as classifier:
             await background_finalize_torrent(app, qbit, _add_context(), chat_id=1)
 
-        classifier.assert_awaited_once()
+        classifier.assert_not_awaited()
+        self.assertEqual(qbit.created_categories, ["JAV"])
         self.assertEqual(qbit.set_categories, [("a" * 40, "JAV")])
-        self.assertEqual(len(app.bot.messages), 2)
-        self.assertIn("推荐: <code>JAV</code>", app.bot.messages[0]["text"])
-        self.assertIn("分类: <code>JAV</code>", app.bot.messages[1]["text"])
+        self.assertEqual(len(app.bot.messages), 1)
+        self.assertIn("已识别 JAV 并移动到", app.bot.messages[0]["text"])
+        self.assertIn("番号: <code>IPZZ-744</code>", app.bot.messages[0]["text"])
 
     async def test_llm_jav_decision_without_javdb_marker_keeps_jav_category(self) -> None:
         app = FakeApplication(llm_classify_enabled=True)

@@ -75,3 +75,58 @@ class QbitClientLoginTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual([item.name for item in categories], ["JAV", "TV"])
         self.assertEqual(categories[0].save_path, "/downloads/jav")
+
+    async def test_add_torrent_accepts_ok_response_body(self) -> None:
+        async def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/api/v2/auth/login":
+                return httpx.Response(
+                    204,
+                    headers={"set-cookie": "SID=test"},
+                    request=request,
+                )
+            if request.url.path == "/api/v2/torrents/add":
+                return httpx.Response(200, text="Ok.", request=request)
+            return httpx.Response(404, request=request)
+
+        qbit = QbitClient("http://qbit.local", "user", "pass")
+        await qbit._client.aclose()
+        qbit._client = httpx.AsyncClient(
+            base_url="http://qbit.local",
+            transport=httpx.MockTransport(handler),
+            headers={"Referer": "http://qbit.local"},
+            trust_env=False,
+        )
+
+        try:
+            await qbit.add_torrent_url_with_options("magnet:?xt=urn:btih:" + "a" * 40)
+        finally:
+            await qbit.close()
+
+    async def test_add_torrent_rejects_fails_response_body(self) -> None:
+        async def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/api/v2/auth/login":
+                return httpx.Response(
+                    204,
+                    headers={"set-cookie": "SID=test"},
+                    request=request,
+                )
+            if request.url.path == "/api/v2/torrents/add":
+                return httpx.Response(200, text="Fails.", request=request)
+            return httpx.Response(404, request=request)
+
+        qbit = QbitClient("http://qbit.local", "user", "pass")
+        await qbit._client.aclose()
+        qbit._client = httpx.AsyncClient(
+            base_url="http://qbit.local",
+            transport=httpx.MockTransport(handler),
+            headers={"Referer": "http://qbit.local"},
+            trust_env=False,
+        )
+
+        try:
+            with self.assertRaisesRegex(RuntimeError, "添加任务失败"):
+                await qbit.add_torrent_url_with_options(
+                    "magnet:?xt=urn:btih:" + "a" * 40
+                )
+        finally:
+            await qbit.close()
