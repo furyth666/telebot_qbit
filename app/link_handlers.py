@@ -14,7 +14,7 @@ from app.handler_utils import require_allowed_user
 from app.jav_rules import extract_jav_lookup_code
 from app.jellyfin_client import JellyfinClient, JellyfinItem
 from app.runtime_state import get_jav_pattern, runtime_context
-from app.stash_client import StashClient, StashScene
+from app.stash_client import StashClient
 
 
 def _pick_best_jellyfin_match(code: str, items: list[JellyfinItem]) -> JellyfinItem:
@@ -120,6 +120,31 @@ async def jellyfin_lookup_handler(
     await _reply_jellyfin_lookup(update, context, code)
 
 
+async def _reply_stash_lookup(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    query: str,
+) -> str:
+    runtime = runtime_context(context.application)
+    stash: StashClient | None = runtime.data.get("stash")
+    settings = runtime.settings
+    if not stash or not stash.enabled or not query:
+        return "disabled"
+
+    scenes = await stash.find_scenes_by_query(query)
+    if not scenes:
+        return "not_found"
+
+    caption = format_stash_caption(
+        query,
+        scenes[0],
+        len(scenes),
+        base_url=settings.stash_base_url,
+    )
+    await update.effective_message.reply_text(caption, parse_mode=ParseMode.HTML)
+    return "found"
+
+
 async def text_link_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not await require_allowed_user(update, context):
         return
@@ -136,8 +161,11 @@ async def text_link_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         code = extract_jav_lookup_code(text, get_jav_pattern(context.application))
         if code:
             await _reply_jellyfin_lookup(update, context, code)
-        else:
-            await message.reply_text("没有识别到下载链接或有效番号。")
+            return
+        query = text.strip()
+        if await _reply_stash_lookup(update, context, query) == "found":
+            return
+        await message.reply_text("没有识别到下载链接、有效番号或 Stash 可查询的片名。")
         return
 
     result = await submit_add_links_from_text(
@@ -163,28 +191,15 @@ async def stash_lookup_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text("查询词不能为空。")
         return
 
-    runtime = runtime_context(context.application)
-    stash: StashClient = runtime.stash
-    settings = runtime.settings
-    if not stash.enabled:
-        await update.message.reply_text("Stash 查询未启用。")
+    stash_result = await _reply_stash_lookup(update, context, query)
+    if stash_result == "disabled":
+        await update.effective_message.reply_text("Stash 查询未启用。")
         return
-
-    scenes = await stash.find_scenes_by_query(query)
-    if not scenes:
-        await update.message.reply_text(
+    if stash_result == "not_found":
+        await update.effective_message.reply_text(
             (
                 "<b>🔎 Stash 未找到匹配</b>\n"
                 f"🔎 查询: <code>{escape(query)}</code>"
             ),
             parse_mode=ParseMode.HTML,
         )
-        return
-
-    caption = format_stash_caption(
-        query,
-        scenes[0],
-        len(scenes),
-        base_url=settings.stash_base_url,
-    )
-    await update.effective_message.reply_text(caption, parse_mode=ParseMode.HTML)
