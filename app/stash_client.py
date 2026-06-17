@@ -20,6 +20,7 @@ class StashScene:
     performers: tuple[str, ...]
     paths: tuple[str, ...]
     tags: tuple[str, ...]
+    screenshot_url: str = ""
 
 
 class StashClient:
@@ -79,6 +80,14 @@ class StashClient:
         scenes = find_scenes.get("scenes") or []
         return [_parse_scene(scene) for scene in scenes]
 
+    async def get_scene_screenshot_bytes(self, scene: StashScene) -> bytes | None:
+        if not self.enabled or not scene.screenshot_url:
+            return None
+
+        response = await self._client.get(scene.screenshot_url)
+        response.raise_for_status()
+        return response.content
+
 
 def _parse_scene(scene: dict[str, Any]) -> StashScene:
     title = _str_or_empty(scene.get("title"))
@@ -100,6 +109,7 @@ def _parse_scene(scene: dict[str, Any]) -> StashScene:
         for tag in scene.get("tags") or []
         if _str_or_empty(tag.get("name"))
     )
+    path_obj = scene.get("paths") or {}
     return StashScene(
         scene_id=_str_or_empty(scene.get("id")),
         title=title,
@@ -108,6 +118,7 @@ def _parse_scene(scene: dict[str, Any]) -> StashScene:
         performers=performers,
         paths=paths,
         tags=tags,
+        screenshot_url=_str_or_empty(path_obj.get("screenshot")),
     )
 
 
@@ -132,6 +143,9 @@ query FindScenes($filter: FindFilterType, $scene_filter: SceneFilterType) {
       }
       files {
         path
+      }
+      paths {
+        screenshot
       }
       tags {
         name

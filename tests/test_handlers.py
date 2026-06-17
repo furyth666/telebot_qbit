@@ -52,10 +52,12 @@ class FakeStash:
         scenes: list[StashScene] | None = None,
         *,
         enabled: bool = False,
+        screenshot_bytes: bytes | None = None,
     ) -> None:
         self.scenes = scenes or []
         self._enabled = enabled
         self.queries: list[str] = []
+        self.screenshot_bytes = screenshot_bytes
 
     @property
     def enabled(self) -> bool:
@@ -64,6 +66,9 @@ class FakeStash:
     async def find_scenes_by_query(self, query: str) -> list[StashScene]:
         self.queries.append(query)
         return self.scenes
+
+    async def get_scene_screenshot_bytes(self, scene: StashScene) -> bytes | None:
+        return self.screenshot_bytes
 
 
 class FakeApplication:
@@ -244,6 +249,30 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Stash 查询结果", reply["text"])
         self.assertIn("Some AV Scene", reply["text"])
         self.assertEqual(reply["parse_mode"], ParseMode.HTML)
+
+    async def test_text_handler_replies_with_stash_scene_screenshot(self) -> None:
+        scene = StashScene(
+            scene_id="scene-1",
+            title="Some AV Scene",
+            date="2024-01-02",
+            studio="Studio",
+            performers=("Actor One",),
+            paths=("/media/Some AV Scene.mp4",),
+            tags=(),
+            screenshot_url="http://stash.local:9999/scene/scene-1/screenshot",
+        )
+        stash = FakeStash([scene], enabled=True, screenshot_bytes=b"image-bytes")
+        app = FakeApplication(stash=stash)
+        update = _update(text="Some AV Scene")
+
+        await text_link_handler(update, _context(app))
+
+        self.assertEqual(stash.queries, ["Some AV Scene"])
+        self.assertEqual(update.message.replies, [])
+        photo = update.message.photos[0]
+        self.assertIn("Stash 查询结果", photo["caption"])
+        self.assertIn("Some AV Scene", photo["caption"])
+        self.assertEqual(photo["parse_mode"], ParseMode.HTML)
 
     async def test_stash_handler_reports_disabled_stash(self) -> None:
         app = FakeApplication(include_stash=True)

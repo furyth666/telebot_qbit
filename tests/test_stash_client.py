@@ -83,6 +83,9 @@ class StashClientTests(unittest.IsolatedAsyncioTestCase):
                                     "files": [
                                         {"path": "/media/test.mp4"},
                                     ],
+                                    "paths": {
+                                        "screenshot": "http://stash.local:9999/scene/scene-1/screenshot",
+                                    },
                                     "tags": [
                                         {"name": "tag-one"},
                                     ],
@@ -116,6 +119,43 @@ class StashClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(scene.performers, ("Performer One", "Performer Two"))
         self.assertEqual(scene.paths, ("/media/test.mp4",))
         self.assertEqual(scene.tags, ("tag-one",))
+        self.assertEqual(
+            scene.screenshot_url,
+            "http://stash.local:9999/scene/scene-1/screenshot",
+        )
+
+    async def test_get_scene_screenshot_bytes_downloads_screenshot(self) -> None:
+        seen_paths: list[str] = []
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            seen_paths.append(request.url.path)
+            return httpx.Response(200, content=b"image-bytes", request=request)
+
+        client = StashClient("http://stash.local:9999")
+        await client._client.aclose()
+        client._client = httpx.AsyncClient(
+            base_url="http://stash.local:9999",
+            transport=httpx.MockTransport(handler),
+            trust_env=False,
+        )
+        scene = StashScene(
+            scene_id="scene-1",
+            title="Title",
+            date="",
+            studio="",
+            performers=(),
+            paths=(),
+            tags=(),
+            screenshot_url="http://stash.local:9999/scene/scene-1/screenshot",
+        )
+
+        try:
+            image_bytes = await client.get_scene_screenshot_bytes(scene)
+        finally:
+            await client.close()
+
+        self.assertEqual(image_bytes, b"image-bytes")
+        self.assertEqual(seen_paths, ["/scene/scene-1/screenshot"])
 
 
 class StashSceneTests(unittest.TestCase):
@@ -128,6 +168,7 @@ class StashSceneTests(unittest.TestCase):
             performers=(),
             paths=(),
             tags=(),
+            screenshot_url="",
         )
         self.assertEqual(scene.scene_id, "1")
 

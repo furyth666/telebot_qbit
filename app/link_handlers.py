@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import logging
 from html import escape
 
 from telegram import InputFile, Update
@@ -141,6 +142,20 @@ async def _reply_stash_lookup(
         len(scenes),
         base_url=settings.stash_base_url,
     )
+    try:
+        image_bytes = await stash.get_scene_screenshot_bytes(scenes[0])
+    except Exception:
+        logging.exception("Failed to fetch Stash scene screenshot")
+        image_bytes = None
+
+    if image_bytes:
+        await update.effective_message.reply_photo(
+            photo=InputFile(io.BytesIO(image_bytes), filename=f"stash-{scenes[0].scene_id}.jpg"),
+            caption=caption,
+            parse_mode=ParseMode.HTML,
+        )
+        return "found"
+
     await update.effective_message.reply_text(caption, parse_mode=ParseMode.HTML)
     return "found"
 
