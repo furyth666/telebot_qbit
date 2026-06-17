@@ -15,6 +15,7 @@ class SensitiveFormatterTests(unittest.TestCase):
             msg=(
                 "url=https://api.telegram.org/bot123456789:AAsecret_token/send "
                 "Authorization: Bearer llm-secret "
+                "Authorization: ApiKey stash-secret "
                 "X-Emby-Token=emby-secret "
                 "password=qb-secret"
             ),
@@ -26,8 +27,10 @@ class SensitiveFormatterTests(unittest.TestCase):
 
         self.assertIn("bot<redacted>", message)
         self.assertIn("Authorization: Bearer <redacted>", message)
+        self.assertIn("Authorization: ApiKey <redacted>", message)
         self.assertIn("X-Emby-Token=<redacted>", message)
         self.assertIn("password=<redacted>", message)
         self.assertNotIn("llm-secret", message)
+        self.assertNotIn("stash-secret", message)
         self.assertNotIn("emby-secret", message)
         self.assertNotIn("qb-secret", message)

@@ -60,6 +60,9 @@ class Settings:
     jellyfin_request_timeout_seconds: float = 20.0
     jellyfin_duplicate_delete_enabled: bool = False
     jellyfin_duplicate_grace_hours: int = 3
+    stash_base_url: str = ""
+    stash_api_key: str = ""
+    stash_request_timeout_seconds: float = 20.0
     llm_classify_enabled: bool = False
     llm_api_base_url: str = "https://api.openai.com/v1"
     llm_api_key: str = ""
@@ -121,6 +124,8 @@ class Settings:
             errors.append("JELLYFIN_DUPLICATE_GRACE_HOURS 必须大于 0")
         if self.jellyfin_request_timeout_seconds <= 0:
             errors.append("JELLYFIN_REQUEST_TIMEOUT_SECONDS 必须大于 0")
+        if self.stash_request_timeout_seconds <= 0:
+            errors.append("STASH_REQUEST_TIMEOUT_SECONDS 必须大于 0")
         if self.llm_classify_enabled and not self.llm_api_key.strip():
             errors.append("LLM_CLASSIFY_ENABLED=true 时必须配置 LLM_API_KEY")
         if not self.llm_api_base_url:
@@ -216,6 +221,11 @@ class Settings:
             ),
             jellyfin_duplicate_grace_hours=int(
                 os.getenv("JELLYFIN_DUPLICATE_GRACE_HOURS", "3")
+            ),
+            stash_base_url=os.getenv("STASH_BASE_URL", "").rstrip("/"),
+            stash_api_key=os.getenv("STASH_API_KEY", ""),
+            stash_request_timeout_seconds=float(
+                os.getenv("STASH_REQUEST_TIMEOUT_SECONDS", "20")
             ),
             llm_classify_enabled=_as_bool(os.getenv("LLM_CLASSIFY_ENABLED"), False),
             llm_api_base_url=os.getenv(

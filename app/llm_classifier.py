@@ -12,8 +12,10 @@ from app.config import Settings
 from app.qbit_client import TorrentCategory, TorrentFile, TorrentSummary
 
 __all__ = [
+    "AvMetadata",
     "LlmCategoryDecision",
     "classify_torrent",
+    "extract_av_metadata",
 ]
 
 
@@ -56,6 +58,15 @@ class LlmCategoryDecision:
     category: str
     confidence: float
     reason: str
+
+
+@dataclass(frozen=True)
+class AvMetadata:
+    title: str
+    performers: tuple[str, ...]
+    studio: str
+    year: str
+    search_query: str
 
 
 def _strip_source_markers(value: str) -> str:
@@ -112,14 +123,64 @@ def _ollama_native_base_url(base_url: str) -> str | None:
     return urlunsplit((parts.scheme, parts.netloc, "", "", ""))
 
 
-def _native_message_content(response_payload: dict[str, Any]) -> str:
-    message = response_payload.get("message")
-    if not isinstance(message, dict):
-        raise ValueError("LLM response did not include a message")
-    content = message.get("content")
-    if not isinstance(content, str) or not content.strip():
+async def _chat_completion(
+    settings: Settings,
+    messages: list[dict[str, Any]],
+    *,
+    json_response: bool = True,
+) -> dict[str, Any]:
+    native_base_url = _ollama_native_base_url(settings.llm_api_base_url)
+    if native_base_url is not None:
+        request_payload: dict[str, Any] = {
+            "model": settings.llm_model,
+            "messages": messages,
+            "format": "json" if json_response else "",
+            "stream": False,
+            "think": False,
+            "options": {"temperature": 0},
+        }
+        async with httpx.AsyncClient(
+            base_url=native_base_url,
+            timeout=settings.llm_request_timeout_seconds,
+            trust_env=False,
+        ) as client:
+            response = await client.post("/api/chat", json=request_payload)
+            response.raise_for_status()
+        return response.json()
+
+    request_payload = {
+        "model": settings.llm_model,
+        "messages": messages,
+        "response_format": {"type": "json_object"} if json_response else {"type": "text"},
+        "temperature": 0,
+        "think": False,
+    }
+    headers = {
+        "Authorization": f"Bearer {settings.llm_api_key}",
+        "Content-Type": "application/json",
+    }
+    async with httpx.AsyncClient(
+        base_url=settings.llm_api_base_url,
+        timeout=settings.llm_request_timeout_seconds,
+        trust_env=False,
+    ) as client:
+        response = await client.post(
+            "/chat/completions",
+            json=request_payload,
+            headers=headers,
+        )
+        response.raise_for_status()
+    return response.json()
+
+
+def _content_from_completion_payload(payload: dict[str, Any]) -> str:
+    native_message = payload.get("message")
+    if isinstance(native_message, dict):
+        content = native_message.get("content")
+        if isinstance(content, str) and content.strip():
+            return content
         raise ValueError("LLM response did not include content")
-    return content
+    return _message_content(payload)
 
 
 async def classify_torrent(
@@ -147,49 +208,63 @@ async def classify_torrent(
         {"role": "system", "content": _category_guidance(settings, jav_prefixes=jav_prefixes)},
         {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
     ]
-    native_base_url = _ollama_native_base_url(settings.llm_api_base_url)
-    if native_base_url is not None:
-        request_payload = {
-            "model": settings.llm_model,
-            "messages": messages,
-            "format": "json",
-            "stream": False,
-            "think": False,
-            "options": {"temperature": 0},
-        }
-        async with httpx.AsyncClient(
-            base_url=native_base_url,
-            timeout=settings.llm_request_timeout_seconds,
-            trust_env=False,
-        ) as client:
-            response = await client.post("/api/chat", json=request_payload)
-            response.raise_for_status()
-
-        content = _native_message_content(response.json())
-        return _decision_from_payload(json.loads(content))
-
-    request_payload = {
-        "model": settings.llm_model,
-        "messages": messages,
-        "response_format": {"type": "json_object"},
-        "temperature": 0,
-        "think": False,
-    }
-    headers = {
-        "Authorization": f"Bearer {settings.llm_api_key}",
-        "Content-Type": "application/json",
-    }
-    async with httpx.AsyncClient(
-        base_url=settings.llm_api_base_url,
-        timeout=settings.llm_request_timeout_seconds,
-        trust_env=False,
-    ) as client:
-        response = await client.post(
-            "/chat/completions",
-            json=request_payload,
-            headers=headers,
-        )
-        response.raise_for_status()
-
-    content = _message_content(response.json())
+    response_payload = await _chat_completion(settings, messages)
+    content = _content_from_completion_payload(response_payload)
     return _decision_from_payload(json.loads(content))
+
+
+_AV_METADATA_SYSTEM_PROMPT = """You extract adult video metadata from a torrent for searching a media library.
+Return JSON only with these fields:
+- title: the main scene or movie title
+- performers: list of performer names (empty list if unknown)
+- studio: studio or production company name (empty string if unknown)
+- year: release year as a string (empty string if unknown)
+- search_query: the best concise search query to find this scene in Stash
+Do not include explanations."""
+
+
+def _av_metadata_from_payload(payload: dict[str, Any]) -> AvMetadata:
+    title = str(payload.get("title", "")).strip()
+    studio = str(payload.get("studio", "")).strip()
+    year = str(payload.get("year", "")).strip()
+    search_query = str(payload.get("search_query", "")).strip()
+    if not search_query and title:
+        search_query = title
+    performers_value = payload.get("performers")
+    performers: tuple[str, ...] = ()
+    if isinstance(performers_value, list):
+        performers = tuple(
+            str(performer).strip()
+            for performer in performers_value
+            if str(performer).strip()
+        )
+    return AvMetadata(
+        title=title,
+        performers=performers,
+        studio=studio,
+        year=year,
+        search_query=search_query,
+    )
+
+
+async def extract_av_metadata(
+    settings: Settings,
+    item: TorrentSummary,
+    files: list[TorrentFile],
+) -> AvMetadata:
+    """Extract AV metadata for Stash search.
+
+    Propagates transport, HTTP, and JSON parse errors so callers can decide
+    whether to fall back to a plain title search.
+    """
+    user_payload = {
+        "torrent_name": _strip_source_markers(item.name),
+        "files": _file_payload(files),
+    }
+    messages = [
+        {"role": "system", "content": _AV_METADATA_SYSTEM_PROMPT},
+        {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
+    ]
+    response_payload = await _chat_completion(settings, messages)
+    content = _content_from_completion_payload(response_payload)
+    return _av_metadata_from_payload(json.loads(content))

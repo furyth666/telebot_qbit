@@ -9,6 +9,7 @@ from app.callback_data import build_torrent_callback
 from app.config import Settings
 from app.jellyfin_client import JellyfinItem
 from app.qbit_client import TorrentFile, TorrentProperties, TorrentSummary
+from app.stash_client import StashScene
 
 
 _STATE_INFO = {
@@ -39,6 +40,7 @@ __all__ = [
     "format_jellyfin_caption",
     "format_large_file_threshold",
     "format_speed",
+    "format_stash_caption",
     "format_torrent_caption",
     "format_torrent_detail",
     "format_torrent_line",
@@ -290,6 +292,45 @@ def format_jellyfin_caption(
         if len(overview) > 300:
             overview = f"{overview[:297].rstrip()}..."
         lines.append(f"📝 {escape(overview)}")
+    if total_count > 1:
+        lines.append(f"🔎 共找到 {total_count} 条匹配，当前展示第 1 条。")
+    return "\n".join(lines)
+
+
+def _stash_scene_url(base_url: str, scene_id: str) -> str:
+    if not base_url or not scene_id:
+        return ""
+    return f"{base_url.rstrip('/')}/scenes/{scene_id}"
+
+
+def format_stash_caption(
+    query: str,
+    scene: StashScene,
+    total_count: int,
+    *,
+    base_url: str,
+) -> str:
+    lines = [
+        "<b>🎬 Stash 查询结果</b>",
+        f"🔎 查询: <code>{escape(query)}</code>",
+        f"📁 标题: <b>{escape(scene.title or '未命名')}</b>",
+    ]
+    meta_parts: list[str] = []
+    if scene.studio:
+        meta_parts.append(f"🏢 {escape(scene.studio)}")
+    if scene.date:
+        meta_parts.append(f"📅 {escape(scene.date)}")
+    if meta_parts:
+        lines.append(" | ".join(meta_parts))
+    if scene.performers:
+        lines.append(f"🎭 演员: {escape(' / '.join(scene.performers))}")
+    if scene.tags:
+        lines.append(f"🏷️ 标签: {escape(' / '.join(scene.tags[:5]))}")
+    if scene.paths:
+        lines.append(f"📂 路径: <code>{escape(scene.paths[0])}</code>")
+    scene_url = _stash_scene_url(base_url, scene.scene_id)
+    if scene_url:
+        lines.append(f'🌐 Stash: <a href="{escape(scene_url)}">打开场景详情</a>')
     if total_count > 1:
         lines.append(f"🔎 共找到 {total_count} 条匹配，当前展示第 1 条。")
     return "\n".join(lines)

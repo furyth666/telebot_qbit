@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from app.basic_handlers import error_handler, help_handler, start_handler
-from app.link_handlers import add_handler, jellyfin_lookup_handler, text_link_handler
+from app.link_handlers import add_handler, jellyfin_lookup_handler, stash_lookup_handler, text_link_handler
 from app.torrent_handlers import (
     active_handler,
     delete_files_handler,
@@ -29,6 +29,7 @@ __all__ = [
     "resume_handler",
     "retry_jav_handler",
     "start_handler",
+    "stash_lookup_handler",
     "status_handler",
     "text_link_handler",
     "torrent_callback_handler",

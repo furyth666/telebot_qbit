@@ -9,11 +9,12 @@ from telegram.ext import ContextTypes
 
 from app.add_flow import submit_add_links_from_text
 from app.add_links import extract_torrent_links
-from app.formatters import format_jellyfin_caption
+from app.formatters import format_jellyfin_caption, format_stash_caption
 from app.handler_utils import require_allowed_user
 from app.jav_rules import extract_jav_lookup_code
 from app.jellyfin_client import JellyfinClient, JellyfinItem
 from app.runtime_state import get_jav_pattern, runtime_context
+from app.stash_client import StashClient, StashScene
 
 
 def _pick_best_jellyfin_match(code: str, items: list[JellyfinItem]) -> JellyfinItem:
@@ -149,3 +150,41 @@ async def text_link_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         result.reply_text,
         parse_mode=ParseMode.HTML,
     )
+
+
+async def stash_lookup_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await require_allowed_user(update, context):
+        return
+    if not context.args:
+        await update.message.reply_text("用法: /stash <标题/演员/工作室>")
+        return
+    query = " ".join(context.args).strip()
+    if not query:
+        await update.message.reply_text("查询词不能为空。")
+        return
+
+    runtime = runtime_context(context.application)
+    stash: StashClient = runtime.stash
+    settings = runtime.settings
+    if not stash.enabled:
+        await update.message.reply_text("Stash 查询未启用。")
+        return
+
+    scenes = await stash.find_scenes_by_query(query)
+    if not scenes:
+        await update.message.reply_text(
+            (
+                "<b>🔎 Stash 未找到匹配</b>\n"
+                f"🔎 查询: <code>{escape(query)}</code>"
+            ),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    caption = format_stash_caption(
+        query,
+        scenes[0],
+        len(scenes),
+        base_url=settings.stash_base_url,
+    )
+    await update.effective_message.reply_text(caption, parse_mode=ParseMode.HTML)

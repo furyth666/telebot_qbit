@@ -17,6 +17,7 @@ from app.jav_rules import extract_jav_code
 from app.jobs import notify_completion_loop
 from app.qbit_client import QbitClient, TorrentSummary
 from app.runtime_state import persist_state, runtime_context
+from app.stash_client import StashClient
 from app.state_store import StateStore
 
 
@@ -161,6 +162,7 @@ async def post_init(application: Application) -> None:
                 BotCommand("deletefiles", "删除任务和文件"),
                 BotCommand("add", "添加磁力链接或 torrent 链接"),
                 BotCommand("jav", "查询 Jellyfin 里的同番号影片"),
+                BotCommand("stash", "查询 Stash 里的场景"),
                 BotCommand("retryjav", "重新执行 JAV 分类和文件筛选"),
             ]
         )
@@ -221,3 +223,6 @@ async def post_shutdown(application: Application) -> None:
     if "jellyfin" in context.data:
         jellyfin: JellyfinClient = context.jellyfin
         await jellyfin.close()
+    if "stash" in context.data:
+        stash: StashClient = context.stash
+        await stash.close()

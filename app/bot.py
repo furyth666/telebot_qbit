@@ -24,6 +24,7 @@ from app.handlers import (
     resume_handler,
     retry_jav_handler,
     start_handler,
+    stash_lookup_handler,
     status_handler,
     text_link_handler,
     torrent_callback_handler,
@@ -32,6 +33,7 @@ from app.jellyfin_client import JellyfinClient
 from app.lifecycle import post_init, post_shutdown
 from app.qbit_client import QbitClient
 from app.runtime_state import runtime_context
+from app.stash_client import StashClient
 
 
 def _register_handlers(application: Application) -> None:
@@ -47,6 +49,7 @@ def _register_handlers(application: Application) -> None:
     application.add_handler(CommandHandler("deletefiles", delete_files_handler))
     application.add_handler(CommandHandler("add", add_handler))
     application.add_handler(CommandHandler("jav", jellyfin_lookup_handler))
+    application.add_handler(CommandHandler("stash", stash_lookup_handler))
     application.add_handler(CommandHandler("retryjav", retry_jav_handler))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_link_handler))
     application.add_handler(CallbackQueryHandler(torrent_callback_handler, pattern=r"^tor:"))
@@ -83,6 +86,11 @@ def create_application(settings: Settings) -> Application:
         settings.jellyfin_base_url,
         settings.jellyfin_api_key,
         timeout=settings.jellyfin_request_timeout_seconds,
+    )
+    context.stash = StashClient(
+        settings.stash_base_url,
+        settings.stash_api_key,
+        timeout=settings.stash_request_timeout_seconds,
     )
     _register_handlers(application)
     return application

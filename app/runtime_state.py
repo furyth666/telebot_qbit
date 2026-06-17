@@ -11,6 +11,7 @@ from telegram.ext import Application
 from app.config import Settings
 from app.jellyfin_client import JellyfinClient
 from app.qbit_client import QbitClient
+from app.stash_client import StashClient
 from app.state_store import BotState, StateStore
 
 __all__ = [
@@ -54,6 +55,14 @@ class RuntimeContext:
     @jellyfin.setter
     def jellyfin(self, value: JellyfinClient) -> None:
         self.data["jellyfin"] = value
+
+    @property
+    def stash(self) -> StashClient:
+        return self.data["stash"]
+
+    @stash.setter
+    def stash(self, value: StashClient) -> None:
+        self.data["stash"] = value
 
     @property
     def jav_pattern(self) -> re.Pattern[str]:

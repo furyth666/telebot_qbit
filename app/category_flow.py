@@ -9,6 +9,10 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.ext import Application
 
+from app.av_policy import (
+    StashDuplicateStatus,
+    handle_stash_duplicate_policy,
+)
 from app.callback_data import build_category_callback
 from app.config import Settings
 from app.formatters import short_hash
@@ -264,6 +268,40 @@ async def handle_llm_category_torrent(
             reply_markup=category_choice_keyboard(item.hash, choices),
         )
         return True
+
+    if category == "AV":
+        duplicate_result = await handle_stash_duplicate_policy(
+            application,
+            item,
+            files=files,
+        )
+        if duplicate_result.status is StashDuplicateStatus.UPGRADE_KEEP:
+            async with context.category_prompt_lock():
+                context.pending_category_choices.pop(item.hash, None)
+                context.prompted_category_hashes.discard(item.hash)
+            await qbit.set_category(item.hash, category)
+            await application.bot.send_message(
+                chat_id=chat_id,
+                text=(
+                    "<b>ℹ️ Stash 已存在同场景，但当前分辨率更高</b>\n"
+                    f"🎬 任务: <b>{escape(item.name)}</b>\n"
+                    f"🔎 查询: <code>{escape(duplicate_result.query)}</code>\n"
+                    "已直接应用 AV 分类并保留下载。"
+                ),
+                parse_mode=ParseMode.HTML,
+            )
+            return True
+        if duplicate_result.status is StashDuplicateStatus.FOUND_KEEP:
+            await application.bot.send_message(
+                chat_id=chat_id,
+                text=(
+                    "<b>ℹ️ Stash 已存在同场景</b>\n"
+                    f"🎬 任务: <b>{escape(item.name)}</b>\n"
+                    f"🔎 查询: <code>{escape(duplicate_result.query)}</code>\n"
+                    "当前分辨率未高于库中版本，请手动选择是否保留及分类。"
+                ),
+                parse_mode=ParseMode.HTML,
+            )
 
     label = category or "未分类"
     reason = decision.reason or "未提供理由"

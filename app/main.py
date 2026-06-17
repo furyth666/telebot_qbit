@@ -6,7 +6,7 @@ from app.config import Settings
 
 
 _TELEGRAM_TOKEN_IN_URL = re.compile(r"bot\d{8,12}:AA[A-Za-z0-9_-]+")
-_BEARER_TOKEN = re.compile(r"(?i)(authorization['\"]?\s*[:=]\s*['\"]?bearer\s+)[^'\"\s,)}]+")
+_BEARER_TOKEN = re.compile(r"(?i)(authorization['\"]?\s*[:=]\s*['\"]?(?:bearer|apikey)\s+)[^'\"\s,)}]+")
 _EMBY_TOKEN = re.compile(r"(?i)(x-emby-token['\"]?\s*[:=]\s*['\"]?)[^'\"\s,)}]+")
 _PASSWORD_FIELD = re.compile(r"(?i)(password['\"]?\s*[:=]\s*['\"]?)[^'\"\s,)}]+")
 
