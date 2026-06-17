@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import logging
+import re
 from html import escape
 
 from telegram import InputFile, Update
@@ -15,7 +16,10 @@ from app.handler_utils import require_allowed_user
 from app.jav_rules import extract_jav_lookup_code
 from app.jellyfin_client import JellyfinClient, JellyfinItem
 from app.runtime_state import get_jav_pattern, runtime_context
-from app.stash_client import StashClient
+from app.stash_client import StashClient, StashScene
+
+
+_STASH_DIRECT_MATCH_SCORE = 60
 
 
 def _pick_best_jellyfin_match(code: str, items: list[JellyfinItem]) -> JellyfinItem:
@@ -136,21 +140,29 @@ async def _reply_stash_lookup(
     if not scenes:
         return "not_found"
 
+    best_scene, best_score = _pick_best_stash_scene(query, scenes)
+    if not best_scene or best_score < _STASH_DIRECT_MATCH_SCORE:
+        await update.effective_message.reply_text(
+            _format_stash_low_confidence_message(query, scenes),
+            parse_mode=ParseMode.HTML,
+        )
+        return "weak_match"
+
     caption = format_stash_caption(
         query,
-        scenes[0],
+        best_scene,
         len(scenes),
         base_url=settings.stash_base_url,
     )
     try:
-        image_bytes = await stash.get_scene_screenshot_bytes(scenes[0])
+        image_bytes = await stash.get_scene_screenshot_bytes(best_scene)
     except Exception:
         logging.exception("Failed to fetch Stash scene screenshot")
         image_bytes = None
 
     if image_bytes:
         await update.effective_message.reply_photo(
-            photo=InputFile(io.BytesIO(image_bytes), filename=f"stash-{scenes[0].scene_id}.jpg"),
+            photo=InputFile(io.BytesIO(image_bytes), filename=f"stash-{best_scene.scene_id}.jpg"),
             caption=caption,
             parse_mode=ParseMode.HTML,
         )
@@ -158,6 +170,95 @@ async def _reply_stash_lookup(
 
     await update.effective_message.reply_text(caption, parse_mode=ParseMode.HTML)
     return "found"
+
+
+def _normalize_stash_lookup_text(value: str) -> str:
+    return " ".join(re.findall(r"[a-z0-9]+", value.casefold()))
+
+
+def _stash_query_tokens(query: str) -> list[str]:
+    normalized = _normalize_stash_lookup_text(query)
+    return [token for token in normalized.split() if token]
+
+
+def _filename_from_path(path: str) -> str:
+    return path.rsplit("/", 1)[-1]
+
+
+def _score_direct_stash_text(query_text: str, tokens: list[str], value: str) -> int:
+    normalized = _normalize_stash_lookup_text(value)
+    if not normalized or not query_text:
+        return 0
+    if normalized == query_text:
+        return 100
+    if query_text in normalized:
+        return 85
+    if tokens and all(token in normalized.split() for token in tokens):
+        return 75
+    matched_tokens = sum(1 for token in tokens if token in normalized.split())
+    return matched_tokens * 12
+
+
+def _score_weak_stash_text(tokens: list[str], value: str) -> int:
+    normalized = _normalize_stash_lookup_text(value)
+    if not normalized:
+        return 0
+    words = normalized.split()
+    matched_tokens = sum(1 for token in tokens if token in words)
+    return matched_tokens * 6
+
+
+def _stash_scene_match_score(query: str, scene: StashScene) -> int:
+    query_text = _normalize_stash_lookup_text(query)
+    tokens = _stash_query_tokens(query)
+    if not query_text or not tokens:
+        return 0
+
+    direct_scores = [
+        _score_direct_stash_text(query_text, tokens, scene.title),
+        *(
+            _score_direct_stash_text(query_text, tokens, _filename_from_path(path))
+            for path in scene.paths
+        ),
+    ]
+    weak_scores = [
+        _score_weak_stash_text(tokens, scene.studio),
+        *(_score_weak_stash_text(tokens, performer) for performer in scene.performers),
+        *(_score_weak_stash_text(tokens, tag) for tag in scene.tags),
+    ]
+    return max([*direct_scores, *weak_scores, 0])
+
+
+def _pick_best_stash_scene(
+    query: str,
+    scenes: list[StashScene],
+) -> tuple[StashScene | None, int]:
+    if not scenes:
+        return None, 0
+    scored = [
+        (_stash_scene_match_score(query, scene), index, scene)
+        for index, scene in enumerate(scenes)
+    ]
+    scored.sort(key=lambda entry: (entry[0], -entry[1]), reverse=True)
+    score, _, scene = scored[0]
+    return scene, score
+
+
+def _format_stash_low_confidence_message(query: str, scenes: list[StashScene]) -> str:
+    lines = [
+        "<b>🔎 Stash 没有找到足够精确的片名匹配</b>",
+        f"🔎 查询: <code>{escape(query)}</code>",
+    ]
+    if scenes:
+        lines.append("只找到这些弱相关候选，暂不直接展示封面：")
+        for scene in scenes[:5]:
+            label_parts = [scene.title or "未命名"]
+            if scene.studio:
+                label_parts.append(scene.studio)
+            if scene.date:
+                label_parts.append(scene.date)
+            lines.append(f"• {escape(' | '.join(label_parts))}")
+    return "\n".join(lines)
 
 
 async def text_link_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -178,7 +279,7 @@ async def text_link_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             await _reply_jellyfin_lookup(update, context, code)
             return
         query = text.strip()
-        if await _reply_stash_lookup(update, context, query) == "found":
+        if await _reply_stash_lookup(update, context, query) in {"found", "weak_match"}:
             return
         await message.reply_text("没有识别到下载链接、有效番号或 Stash 可查询的片名。")
         return

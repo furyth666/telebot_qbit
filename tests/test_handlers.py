@@ -274,6 +274,63 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Some AV Scene", photo["caption"])
         self.assertEqual(photo["parse_mode"], ParseMode.HTML)
 
+    async def test_text_handler_does_not_directly_show_weak_stash_match(self) -> None:
+        scene = StashScene(
+            scene_id="scene-1",
+            title="Walking On The Hills",
+            date="2017-07-30",
+            studio="Watch4Beauty",
+            performers=("Mila Azul",),
+            paths=("/media/Walking On The Hills.Watch4Beauty.2017-07-30.mp4",),
+            tags=(),
+            screenshot_url="http://stash.local:9999/scene/scene-1/screenshot",
+        )
+        stash = FakeStash([scene], enabled=True, screenshot_bytes=b"image-bytes")
+        app = FakeApplication(stash=stash)
+        update = _update(text="Glow of beauty")
+
+        await text_link_handler(update, _context(app))
+
+        self.assertEqual(stash.queries, ["Glow of beauty"])
+        self.assertEqual(update.message.photos, [])
+        self.assertEqual(len(update.message.replies), 1)
+        reply = update.message.replies[0]
+        self.assertIn("没有找到足够精确的片名匹配", reply["text"])
+        self.assertIn("Walking On The Hills", reply["text"])
+        self.assertNotIn("没有识别到下载链接", reply["text"])
+        self.assertEqual(reply["parse_mode"], ParseMode.HTML)
+
+    async def test_text_handler_prefers_exact_stash_title_over_first_result(self) -> None:
+        weak_scene = StashScene(
+            scene_id="weak",
+            title="Walking On The Hills",
+            date="2017-07-30",
+            studio="Watch4Beauty",
+            performers=("Mila Azul",),
+            paths=("/media/Walking On The Hills.Watch4Beauty.2017-07-30.mp4",),
+            tags=(),
+        )
+        exact_scene = StashScene(
+            scene_id="exact",
+            title="Glow of Beauty",
+            date="2024-01-02",
+            studio="Studio",
+            performers=("Actor One",),
+            paths=("/media/Glow of Beauty.Studio.2024-01-02.mp4",),
+            tags=(),
+        )
+        stash = FakeStash([weak_scene, exact_scene], enabled=True)
+        app = FakeApplication(stash=stash)
+        update = _update(text="Glow of beauty")
+
+        await text_link_handler(update, _context(app))
+
+        self.assertEqual(stash.queries, ["Glow of beauty"])
+        reply = update.message.replies[0]
+        self.assertIn("Glow of Beauty", reply["text"])
+        self.assertNotIn("Walking On The Hills", reply["text"])
+        self.assertEqual(reply["parse_mode"], ParseMode.HTML)
+
     async def test_stash_handler_reports_disabled_stash(self) -> None:
         app = FakeApplication(include_stash=True)
         update = _update()
