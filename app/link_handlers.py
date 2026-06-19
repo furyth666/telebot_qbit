@@ -152,7 +152,7 @@ async def _reply_stash_lookup(
         query,
         best_scene,
         len(scenes),
-        base_url=settings.stash_base_url,
+        base_url=settings.stash_public_base_url or settings.stash_base_url,
     )
     try:
         image_bytes = await stash.get_scene_screenshot_bytes(best_scene)

@@ -61,6 +61,7 @@ class Settings:
     jellyfin_duplicate_delete_enabled: bool = False
     jellyfin_duplicate_grace_hours: int = 3
     stash_base_url: str = ""
+    stash_public_base_url: str = ""
     stash_api_key: str = ""
     stash_request_timeout_seconds: float = 20.0
     llm_classify_enabled: bool = False
@@ -223,6 +224,7 @@ class Settings:
                 os.getenv("JELLYFIN_DUPLICATE_GRACE_HOURS", "3")
             ),
             stash_base_url=os.getenv("STASH_BASE_URL", "").rstrip("/"),
+            stash_public_base_url=os.getenv("STASH_PUBLIC_BASE_URL", "").rstrip("/"),
             stash_api_key=os.getenv("STASH_API_KEY", ""),
             stash_request_timeout_seconds=float(
                 os.getenv("STASH_REQUEST_TIMEOUT_SECONDS", "20")

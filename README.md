@@ -107,6 +107,10 @@ UNRAID_HOST_NETWORK_ACK=I_UNDERSTAND_HOST_NETWORK_IS_INTENTIONAL
 - `JELLYFIN_REQUEST_TIMEOUT_SECONDS`: Jellyfin API 请求超时，默认 `20`
 - `JELLYFIN_DUPLICATE_DELETE_ENABLED`: 是否启用 Jellyfin 重复检查
 - `JELLYFIN_DUPLICATE_GRACE_HOURS`: 同番号再次添加的保留窗口，默认 `3`
+- `STASH_BASE_URL`: Stash API 地址，用于查询 AV scenes，例如 `http://127.0.0.1:9999`
+- `STASH_PUBLIC_BASE_URL`: 返回给 Telegram 的 Stash 访问地址，例如 `https://stash.furyth666.com`
+- `STASH_API_KEY`: Stash API Key，可选
+- `STASH_REQUEST_TIMEOUT_SECONDS`: Stash API 请求超时，默认 `20`
 - `LLM_CLASSIFY_ENABLED`: 是否启用大模型自动分类，默认 `false`
 - `LLM_API_BASE_URL`: OpenAI-compatible API 地址，默认 `https://api.openai.com/v1`
 - `LLM_API_KEY`: 大模型 API Key，启用自动分类时必填

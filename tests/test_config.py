@@ -40,6 +40,8 @@ class ConfigTests(unittest.TestCase):
             "JAV_FILE_POLL_ATTEMPTS": "4",
             "JAV_FILE_POLL_INTERVAL_SECONDS": "0.25",
             "JELLYFIN_REQUEST_TIMEOUT_SECONDS": "7.5",
+            "STASH_BASE_URL": "http://127.0.0.1:9999/",
+            "STASH_PUBLIC_BASE_URL": "https://stash.furyth666.com/",
             "ADD_CONTEXT_POLL_ATTEMPTS": "5",
             "ADD_CONTEXT_POLL_INTERVAL_SECONDS": "0.5",
         }
@@ -53,6 +55,8 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(settings.jav_file_poll_attempts, 4)
         self.assertEqual(settings.jav_file_poll_interval_seconds, 0.25)
         self.assertEqual(settings.jellyfin_request_timeout_seconds, 7.5)
+        self.assertEqual(settings.stash_base_url, "http://127.0.0.1:9999")
+        self.assertEqual(settings.stash_public_base_url, "https://stash.furyth666.com")
         self.assertEqual(settings.add_context_poll_attempts, 5)
         self.assertEqual(settings.add_context_poll_interval_seconds, 0.5)
 

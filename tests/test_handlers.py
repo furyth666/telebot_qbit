@@ -78,6 +78,7 @@ class FakeApplication:
         *,
         stash: FakeStash | None = None,
         include_stash: bool = False,
+        stash_public_base_url: str = "",
     ) -> None:
         stash_enabled = bool(stash) or include_stash
         self.bot_data = {
@@ -88,6 +89,7 @@ class FakeApplication:
                 qbit_username="user",
                 qbit_password="pass",
                 stash_base_url="http://stash.local:9999" if stash_enabled else "",
+                stash_public_base_url=stash_public_base_url,
             ),
             "qbit": FakeQbit(),
             "jellyfin": FakeJellyfin(),
@@ -249,6 +251,29 @@ class HandlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Stash 查询结果", reply["text"])
         self.assertIn("Some AV Scene", reply["text"])
         self.assertEqual(reply["parse_mode"], ParseMode.HTML)
+
+    async def test_text_handler_uses_public_stash_base_url_in_caption(self) -> None:
+        scene = StashScene(
+            scene_id="scene-1",
+            title="Some AV Scene",
+            date="2024-01-02",
+            studio="Studio",
+            performers=("Actor One",),
+            paths=("/media/Some AV Scene.mp4",),
+            tags=(),
+        )
+        stash = FakeStash([scene], enabled=True)
+        app = FakeApplication(
+            stash=stash,
+            stash_public_base_url="https://stash.furyth666.com",
+        )
+        update = _update(text="Some AV Scene")
+
+        await text_link_handler(update, _context(app))
+
+        reply = update.message.replies[0]
+        self.assertIn("https://stash.furyth666.com/scenes/scene-1", reply["text"])
+        self.assertNotIn("http://stash.local:9999/scenes/scene-1", reply["text"])
 
     async def test_text_handler_replies_with_stash_scene_screenshot(self) -> None:
         scene = StashScene(
